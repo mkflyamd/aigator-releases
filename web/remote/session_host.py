@@ -8,15 +8,19 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 import pty_client
+
+if TYPE_CHECKING:
+    from remote.prompts import Prompt
 
 _log = logging.getLogger(__name__)
 
 AGENT = "claude"
 _TRANSCRIPT_TRIES = 4
 _TRANSCRIPT_WAIT = 0.5
+SCREEN_TAIL_CHARS = 12000
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 WOKEN_BY = "Remote control"
 PROMPT_CHECK_SECONDS = 3.0
@@ -51,6 +55,10 @@ class HostError(Exception):
     def __init__(self, message: str, permanent: bool = False):
         super().__init__(message)
         self.permanent = permanent
+
+
+class StalePrompt(HostError):
+    """The prompt being answered is gone or has changed, so nothing was typed."""
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,8 @@ class SessionHost(Protocol):
     async def state(self, pty_id: str) -> dict | None: ...
     async def last_message(self, pty_id: str) -> str: ...
     async def output(self, pty_id: str, since: int) -> tuple[str, int]: ...
+    async def prompt(self, pty_id: str) -> Prompt | None: ...
+    async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None: ...
 
 
 class LocalPtyHost:
@@ -462,3 +472,51 @@ class LocalPtyHost:
             raise HostError("That session is no longer running.")
         text, end = entry.read_from(since)
         return _ANSI.sub("", text), end
+
+    async def prompt(self, pty_id: str) -> Prompt | None:
+        return await asyncio.to_thread(self._prompt, pty_id)
+
+    @staticmethod
+    def _prompt(pty_id: str) -> Prompt | None:
+        import agent_handoff
+        import agent_state
+        from remote import prompts
+
+        found = agent_state.read_prompt(pty_id)
+        if not found:
+            return None
+        redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
+        parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
+        return parsed or prompts.unreadable(found["at"])
+
+    async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
+        """Types `keys` only while the agent is still showing the prompt `prompt_id`. No hook fires when the
+        prompt is answered at the terminal, so the prompt file and the asking state outlive it; the terminal
+        itself is checked: no keys typed there since the prompt appeared, and (for a permission) its dialog
+        still the last thing on screen. A turn that the keys end fires no hook, so idle is reported here."""
+        import agent_state
+        from remote import prompts
+        from routes import terminal
+
+        shown = await self.prompt(pty_id)
+        state = await self.state(pty_id)
+        if shown is None or shown.id != prompt_id or not state or state["state"] != "asking":
+            raise StalePrompt("That prompt is no longer showing.")
+        entry = await asyncio.to_thread(terminal.get_pty_session, pty_id)
+        if entry is None:
+            raise HostError("That session is no longer running.")
+        if entry.last_user_input > shown.at:
+            raise StalePrompt("It was answered at the terminal.")
+        if shown.kind == prompts.PERMISSION:
+            _, end = entry.read_from(10**12)
+            tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
+            if not prompts.permission_dialog_showing(_ANSI.sub("", tail), shown):
+                raise StalePrompt("The terminal is no longer showing that permission.")
+        for index, key in enumerate(keys):
+            if index:
+                await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)
+            if not await asyncio.to_thread(terminal.write_pty_session, pty_id, key):
+                raise HostError("The answer could not be typed into the terminal.")
+        await asyncio.to_thread(agent_state.clear_prompt, pty_id)
+        if ends_turn:
+            await asyncio.to_thread(agent_state.set_state, pty_id, "idle")

@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import time
 import uuid
 
@@ -91,6 +93,97 @@ def test_claude_settings_map_events_to_states():
     assert "idle_prompt" not in json.dumps(hooks)
     for event in hooks:
         assert "GATOR_PTY_ID" in cmd(event)
+
+
+def test_claude_settings_keep_the_permission_payload_until_the_agent_moves_on():
+    hooks = json.loads(open(agent_state.claude_settings_path(), encoding="utf-8").read())["hooks"]
+
+    def cmd(event):
+        return hooks[event][0]["hooks"][0]["command"]
+
+    assert "cat >" in cmd("PermissionRequest") and ".prompt" in cmd("PermissionRequest")
+    assert "mv -f" in cmd("PermissionRequest") and "GATOR_PTY_ID" in cmd("PermissionRequest")
+    assert "asking" not in cmd("PermissionRequest")
+    for event in ("UserPromptSubmit", "PostToolUse", "Stop", "SessionStart", "SessionEnd"):
+        assert "rm -f" in cmd(event) and ".prompt" in cmd(event)
+    assert ".prompt" not in cmd("Notification")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="hooks run in a POSIX shell")
+def test_the_hooks_write_and_remove_the_prompt_file_when_run_by_a_shell():
+    hooks = json.loads(open(agent_state.claude_settings_path(), encoding="utf-8").read())["hooks"]
+    env = {**os.environ, **agent_state.launch_env(PTY)}
+
+    def run(event, stdin=""):
+        command = hooks[event][0]["hooks"][0]["command"]
+        subprocess.run([shutil.which("bash"), "-c", command], input=stdin.encode(), env=env, check=True)
+
+    payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+    run("PermissionRequest", json.dumps(payload))
+    found = agent_state.read_prompt(PTY)
+    assert found["payload"] == payload and abs(found["at"] - time.time()) < 60
+    assert not [p for p in agent_state.STATE_DIR.iterdir() if p.name.endswith(".tmp")]
+    run("Notification")
+    assert agent_state.read_states([PTY])[PTY]["state"] == "asking"
+    assert agent_state.read_prompt(PTY) is not None
+    run("PostToolUse")
+    assert agent_state.read_prompt(PTY) is None
+    assert agent_state.read_states([PTY])[PTY]["state"] == "working"
+
+
+def test_read_prompt_returns_the_payload_and_its_event_time():
+    path = agent_state.STATE_DIR / (PTY + ".prompt")
+    path.write_text(json.dumps({"tool_name": "Bash"}), encoding="utf-8")
+    found = agent_state.read_prompt(PTY)
+    assert found["payload"] == {"tool_name": "Bash"}
+    assert found["at"] == path.stat().st_mtime
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("not json", id="not-json"),
+        pytest.param("[1, 2]", id="not-an-object"),
+        pytest.param("x" * (agent_state.PROMPT_MAX_BYTES + 1), id="oversize"),
+    ],
+)
+def test_read_prompt_reports_an_unreadable_or_oversize_file_as_a_prompt_with_no_payload(content):
+    (agent_state.STATE_DIR / (PTY + ".prompt")).write_text(content, encoding="utf-8")
+    found = agent_state.read_prompt(PTY)
+    assert found["payload"] is None and found["at"] > 0
+
+
+def test_read_prompt_ignores_a_missing_file_and_a_bad_id():
+    assert agent_state.read_prompt(PTY) is None
+    assert agent_state.read_prompt("../../etc/passwd") is None
+
+
+def test_clear_prompt_and_clear_both_drop_the_prompt_file():
+    path = agent_state.STATE_DIR / (PTY + ".prompt")
+    path.write_text("{}", encoding="utf-8")
+    agent_state.clear_prompt(PTY)
+    assert not path.exists()
+    path.write_text("{}", encoding="utf-8")
+    put(PTY, "asking")
+    agent_state.clear(PTY)
+    assert not path.exists() and agent_state.read_states([PTY]) == {}
+    agent_state.clear_prompt("../../etc/passwd")
+
+
+def test_set_state_reports_a_word_and_refuses_anything_else():
+    agent_state.set_state(PTY, "idle")
+    assert agent_state.read_states([PTY])[PTY]["state"] == "idle"
+    with pytest.raises(ValueError):
+        agent_state.set_state(PTY, "asking now")
+    with pytest.raises(ValueError):
+        agent_state.set_state("../../etc/passwd", "idle")
+
+
+def test_the_prompt_file_is_not_mistaken_for_a_session_state():
+    put(PTY, "asking")
+    (agent_state.STATE_DIR / (PTY + ".prompt")).write_text("{}", encoding="utf-8")
+    assert list(agent_state.read_states([PTY])) == [PTY]
 
 
 def test_clear_drops_a_reported_state_and_ignores_bad_ids():

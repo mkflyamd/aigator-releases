@@ -471,7 +471,7 @@ async def test_a_failing_directory_does_not_break_other_commands(tmp_path):
 
 
 def test_the_list_text_is_unchanged_when_there_are_only_remote_sessions():
-    assert "Other agents" not in commands.session_list([("budget", "Budget", commands.IDLE)])
+    assert "Other agents" not in commands.session_list([("budget", "Budget", commands.IDLE, 0.0, "")])
 
 
 def test_the_list_text_with_only_agents_says_no_remote_sessions_are_running():

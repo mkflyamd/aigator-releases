@@ -17,14 +17,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from remote import commands
+from remote import commands, prompts
 from remote.guard import limit
-from remote.session_host import HostError, Project, RestoredSession, SessionHost
+from remote.session_host import HostError, Project, RestoredSession, SessionHost, StalePrompt
 from remote.state import State
 
 _log = logging.getLogger(__name__)
 
 IDLE_SECONDS = 8 * 3600.0
+PROMPT_GRACE_SECONDS = 3.0
 WAKE_MIN_INTERVAL = 30.0
 LIVE, SLEEPING, FAILED = "live", "sleeping", "failed"
 STARTED = "started"
@@ -54,6 +55,19 @@ class Aborted(RemoteError):
     went wrong, so nothing is reported."""
 
 
+class PromptRefused(RemoteError):
+    """The reply was not an answer to the prompt the session is showing."""
+
+    def __init__(self, prompt: prompts.Prompt, reason: str):
+        super().__init__(reason)
+        self.prompt = prompt
+        self.reason = reason
+
+
+class PromptGone(RemoteError):
+    """The prompt was answered, or changed, before the reply arrived. Nothing was typed."""
+
+
 @dataclass
 class Session:
     id: str
@@ -67,6 +81,9 @@ class Session:
     waiting: bool = False
     last_event_at: float = 0.0
     stopping: bool = False
+    prompt: prompts.Prompt | None = None
+    asking_since: float | None = None
+    prompt_seen_at: float = 0.0
     state: str = LIVE
     waking: bool = False
     last_wake_at: float = float("-inf")
@@ -384,7 +401,35 @@ class RemoteService:
             raise RemoteError(str(exc), exc.permanent) from exc
         session.last_activity = session.awaiting_since = self._clock()
         session.waiting = False
+        session.prompt = session.asking_since = None
         self._persist(session)
+
+    async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
+        """Types the reply into the prompt the session is showing. Only a session Remote started has one:
+        another agent's prompts are answered in its own terminal. A reply written before that prompt was first seen
+        was meant for an earlier one, and is not typed."""
+        session = self.get(session_id)
+        if session.kind != STARTED:
+            raise Refusal("Messages to another agent go through its name, not through Remote control.")
+        shown = session.prompt
+        if shown is None:
+            raise RemoteError("That session is not waiting on a prompt.")
+        if 0 < sent_at < session.prompt_seen_at:
+            raise PromptRefused(shown, "that was for an earlier question.")
+        result = prompts.resolve(shown, text)
+        if isinstance(result, prompts.Refused):
+            raise PromptRefused(shown, result.reason)
+        try:
+            await self._host.answer(session.pty_id, shown.id, result.keys, result.ends_turn)
+        except StalePrompt as exc:
+            session.waiting, session.prompt, session.asking_since = False, None, None
+            raise PromptGone(str(exc)) from exc
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
+        session.last_activity = self._clock()
+        session.awaiting_since = None if result.ends_turn else session.last_activity
+        session.waiting, session.prompt, session.asking_since = False, None, None
+        return result
 
     async def needs_wake(self, session: Session) -> bool:
         """True when the lane has no running process or is being woken. The host is asked, never
@@ -590,28 +635,77 @@ class RemoteService:
                 continue
             await self._check_state(session)
 
+    async def refresh(self, session_id: str) -> None:
+        """For a reply that comes before the next tick has seen the session ask: the prompt is known now, and an
+        app-only stand-in covers one that has no file, so the reply is answered with what is showing."""
+        session = self.get(session_id)
+        state = await self._host.state(session.pty_id)
+        if session.prompt is not None or not state or state["state"] != "asking":
+            return
+        session.prompt = await self._host.prompt(session.pty_id) or prompts.unreadable(state["at"], prompts.UNSEEN_WHY)
+        session.prompt_seen_at = min(self._clock(), state["at"])
+        session.waiting, session.asking_since = True, None
+        session.last_event_at = max(session.last_event_at, state["at"])
+
     async def _check_state(self, session: Session) -> None:
         state = await self._host.state(session.pty_id)
+        asking = bool(state) and state["state"] == "asking"
+        if not asking:
+            session.asking_since = None
+        if asking and session.asking_since is not None:
+            await self._find_late_prompt(session, state["at"])
+            return
         if not state or state["at"] <= session.last_event_at:
             return
         # Another agent's own questions and turns are its owner's business; only what follows a
         # message sent from chat is reported.
-        if session.kind == ADOPTED and (session.awaiting_since is None or state["at"] < session.awaiting_since):
+        adopted = session.kind == ADOPTED
+        if adopted and (session.awaiting_since is None or state["at"] < session.awaiting_since):
             return
-        if state["state"] == "asking":
-            kind = "input-required"
+        if asking:
+            # An adopted agent's prompt is never read or answered here: it is answered in its own terminal.
+            if not adopted:
+                if session.waiting and session.prompt is not None:
+                    again = await self._host.prompt(session.pty_id)
+                    if again is None or again.id == session.prompt.id:
+                        session.last_event_at = state["at"]
+                        return
+                    session.prompt, session.prompt_seen_at = again, self._clock()
+                else:
+                    session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
             session.waiting = True
+            session.last_event_at = state["at"]
+            if not adopted and session.prompt is None:
+                session.asking_since = self._clock()
+                return
+            kind = "input-required"
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
         else:
             return
-        session.last_event_at = state["at"]
         if kind == "completed":
+            session.last_event_at = state["at"]
             session.awaiting_since = None
             session.waiting = False
+            session.prompt = None
         session.last_activity = max(session.last_activity, state["at"])
         self._persist(session)
-        text = await self._host.last_message(session.pty_id)
-        if kind == "completed" and session.kind == ADOPTED:
+        text = "" if kind == "input-required" and not adopted else await self._host.last_message(session.pty_id)
+        if kind == "completed" and adopted:
             self._sessions.pop(session.id, None)  # watched for one answer; the next message adopts it again
         await self._emit(kind, session, text)
+
+    async def _find_late_prompt(self, session: Session, at: float) -> None:
+        """The agent says it is asking but wrote no prompt yet. After PROMPT_GRACE_SECONDS the question is its last
+        message, or, when there is none, an app-only stand-in: an ask is never posted as an empty message."""
+        session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
+        text = ""
+        if session.prompt is None:
+            if self._clock() - session.asking_since < PROMPT_GRACE_SECONDS:
+                return
+            text = await self._host.last_message(session.pty_id)
+            if not text:
+                session.prompt = prompts.unreadable(at, prompts.UNSEEN_WHY)
+        session.asking_since = None
+        session.last_activity = max(session.last_activity, at)
+        await self._emit("input-required", session, text)

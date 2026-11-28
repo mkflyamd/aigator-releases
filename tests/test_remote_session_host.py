@@ -2,11 +2,16 @@
 
 import json
 import logging
+import os
+
+import pytest
 
 import agent_handoff
 import agent_sessions
+import agent_state
+from remote import prompts
 from remote.commands import agent_result
-from remote.session_host import LocalPtyHost
+from remote.session_host import HostError, LocalPtyHost, StalePrompt
 from routes import terminal
 from skills.code_agent import projects
 
@@ -179,3 +184,222 @@ def test_last_assistant_text_reads_the_newest_reply_and_previews_stay_flat(tmp_p
     newest = json.loads(transcript.read_text(encoding="utf-8").splitlines()[-1])
     assert agent_sessions._claude_message(newest) == ("assistant", "new answer")
     assert agent_sessions._claude_message(newest, flat=False) == ("assistant", "new\nanswer")
+
+
+# ---------------------------------------------------------------- answering a prompt
+
+PTY = "0b1f3c5e-1111-4222-8333-444455556666"
+BASH = {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}}
+
+
+# The tail of a real Claude Code 2.1.283 Bash permission dialog (ANSI stripped, spaces painted as cursor moves).
+BASH_DIALOG = (
+    "● Bash(echo hi) ⎿  Waiting…\n"
+    "────────────\nDoyouwanttoproceed?\n❯1.Yes\n2.Yes,andalwaysallowaccesstoC:\\repoduringthissession\n"
+    "3.Yes,andswitchtoautomode\n4.No\n\nEsctocancel·Tabtoamend"
+)
+AFTER_ENTER = BASH_DIALOG + "\n●\n✢Marinating…\n*Marinating…3"
+AFTER_ESC = BASH_DIALOG + "\n● Interrupted · What should Claude do instead?"
+LATER_DIALOG = BASH_DIALOG.replace("echo hi", "ls") + "\n●Ran ls\nDoyouwanttocreateout.txt?\n❯1.Yes\n2.No"
+
+
+class _Screen:
+    def __init__(self, text):
+        self.text = text
+        self.last_user_input = 0.0
+
+    def read_from(self, offset):
+        end = len(self.text)
+        return ("" if offset >= end else self.text[offset:]), end
+
+
+@pytest.fixture
+def screen(monkeypatch):
+    shown = _Screen(BASH_DIALOG)
+    monkeypatch.setattr(terminal, "get_pty_session", lambda pty: shown)
+    return shown
+
+
+@pytest.fixture
+def typed(tmp_path, monkeypatch, screen):
+    monkeypatch.setattr(agent_state, "STATE_DIR", tmp_path / "agent-state")
+    agent_state.STATE_DIR.mkdir()
+    monkeypatch.setattr(agent_handoff, "_configured_api_keys", lambda: [FAKE_KEY])
+    monkeypatch.setattr(prompts, "KEY_PAUSE_SECONDS", 0)
+    keys = []
+    monkeypatch.setattr(terminal, "write_pty_session", lambda pty, key: keys.append((pty, key)) or True)
+    return keys
+
+
+def _show(payload, state="asking"):
+    agent_state.set_state(PTY, state)
+    (agent_state.STATE_DIR / (PTY + ".prompt")).write_text(json.dumps(payload), encoding="utf-8")
+
+
+async def test_the_prompt_comes_from_the_hook_payload_and_is_redacted(typed):
+    _show({"tool_name": "Bash", "tool_input": {"command": f"echo {FAKE_KEY}"}})
+    shown = await LocalPtyHost().prompt(PTY)
+    assert shown.kind == prompts.PERMISSION
+    assert FAKE_KEY not in shown.command and "[REDACTED]" in shown.command
+
+
+async def test_no_prompt_file_means_no_prompt(typed):
+    assert await LocalPtyHost().prompt(PTY) is None
+
+
+async def test_the_keys_are_typed_in_order_and_the_prompt_is_cleared(typed):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.DOWN, prompts.ENTER))
+    assert typed == [(PTY, prompts.DOWN), (PTY, prompts.ENTER)]
+    assert agent_state.read_prompt(PTY) is None
+    assert agent_state.read_states([PTY])[PTY]["state"] == "asking"
+
+
+async def test_a_denied_turn_is_reported_idle_because_the_agent_fires_no_hook(typed):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == [(PTY, prompts.ESCAPE)]
+    assert agent_state.read_states([PTY])[PTY]["state"] == "idle"
+    assert agent_state.read_prompt(PTY) is None
+
+
+async def test_nothing_is_typed_when_the_prompt_changed_since_it_was_shown(typed):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    _show({**BASH, "tool_input": {"command": "rm -rf build"}})
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_nothing_is_typed_when_the_same_prompt_came_up_again_later(typed):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    path = agent_state.STATE_DIR / (PTY + ".prompt")
+    later = path.stat().st_mtime + 30
+    os.utime(path, (later, later))
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+@pytest.mark.parametrize("state", ["working", "idle"])
+async def test_nothing_is_typed_when_the_agent_is_no_longer_asking(typed, state):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    agent_state.set_state(PTY, state)
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_nothing_is_typed_when_the_prompt_was_answered_in_the_app(typed):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    agent_state.clear_prompt(PTY)
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_a_terminal_that_refuses_the_keys_is_an_error_not_a_silent_success(typed, monkeypatch):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    monkeypatch.setattr(terminal, "write_pty_session", lambda pty, key: False)
+    with pytest.raises(HostError):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+
+
+@pytest.mark.parametrize("text", [AFTER_ENTER, AFTER_ESC, LATER_DIALOG, "", "Doyouwanttoproceed?\n❯1.Yes\n4.No"])
+async def test_nothing_is_typed_when_the_terminal_no_longer_shows_that_dialog(typed, screen, text):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = text
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == []
+    assert agent_state.read_states([PTY])[PTY]["state"] == "asking"
+
+
+async def test_nothing_is_typed_after_the_user_typed_at_the_terminal(typed, screen):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.last_user_input = shown.at + 1
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_typing_before_the_prompt_appeared_does_not_block_the_answer(typed, screen):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.last_user_input = shown.at - 60
+    await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == [(PTY, prompts.ENTER)]
+
+
+ASK = {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Q?", "options": [{"label": "A"}, {"label": "B"}]}]}}
+
+
+async def test_a_question_is_checked_by_terminal_input_not_by_the_permission_screen(typed, screen):
+    _show(ASK)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = "a question dialog the permission check knows nothing about"
+    await host.answer(PTY, shown.id, (prompts.DOWN, prompts.ENTER))
+    assert typed == [(PTY, prompts.DOWN), (PTY, prompts.ENTER)]
+    _show(ASK)
+    shown = await host.prompt(PTY)
+    screen.last_user_input = shown.at + 1
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+
+
+async def test_a_session_that_is_gone_is_an_error(typed, monkeypatch):
+    _show(BASH)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    monkeypatch.setattr(terminal, "get_pty_session", lambda pty: None)
+    with pytest.raises(HostError):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+
+
+async def test_an_oversize_prompt_file_is_an_app_only_prompt_that_cannot_be_answered(typed):
+    agent_state.set_state(PTY, "asking")
+    (agent_state.STATE_DIR / (PTY + ".prompt")).write_text("x" * (agent_state.PROMPT_MAX_BYTES + 1), encoding="utf-8")
+    shown = await LocalPtyHost().prompt(PTY)
+    assert shown.kind == prompts.APP_ONLY and not shown.answerable
+    message = prompts.waiting_message("a", "p", shown)
+    assert "it is too large to show here" in message and prompts.OPEN_APP_QUESTION in message
+    assert isinstance(prompts.resolve(shown, "allow"), prompts.Refused)
+
+
+async def test_nothing_is_typed_when_the_dialog_on_screen_is_another_tool_call(typed):
+    _show({**BASH, "tool_input": {"command": "rm -rf build"}})
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_the_dialog_of_the_same_tool_call_is_typed_into_even_when_the_command_wraps(typed, screen):
+    long = "pytest tests/test_remote_prompt_flow.py tests/test_remote_session_host.py -k permission -x -q"
+    _show({**BASH, "tool_input": {"command": long}})
+    screen.text = BASH_DIALOG.replace("echo hi", "pytest tests/test_remote_prompt_flow.py\n│ tests/test_remote_session_host.py\n│ -k permission -x -q")
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == [(PTY, prompts.ENTER)]

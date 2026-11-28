@@ -55,6 +55,7 @@ class Command:
     name: str | None = None
     text: str = ""
     tagged: bool = True  # False for an ordinary message routed by the open chat window
+    sent_at: float = 0.0  # when the user wrote it, as the channel says; 0 when it does not
 
 
 def _cap_bytes(text: str) -> str:
@@ -104,7 +105,8 @@ def app_prefix() -> str:
 def system_reply(body: str, options: list[str], *, after: str = "") -> str:
     """An app notice: the state and body, a blank line, the Next block, then an optional closing line."""
     tail = f"\n\n{after}" if after else ""
-    return _tidy(f"{app_prefix()} {body}\n\n{next_block(options)}{tail}")
+    choices = f"\n\n{next_block(options)}" if options else ""
+    return _tidy(f"{app_prefix()} {body}{choices}{tail}")
 
 
 def agent_prefix(session: str, project: str | None = None, several: bool = False) -> str:
@@ -184,11 +186,7 @@ def attachment_not_sent() -> str:
 
 def help_text(chat_open: bool = True) -> str:
     if chat_open:
-        return system_reply(
-            f"This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
-            _tip_options(True),
-            after=_quiet_note(),
-        )
+        return system_reply("Here is what you can type.", _tip_options(True))
     return system_reply("This chat is closed, so start each message with `@gator`.", _tip_options(False))
 
 
@@ -281,42 +279,65 @@ def session_not_found(name: str) -> str:
     return system_reply(f"No session named {shown}.", ["`list` to see what is running."])
 
 
+def _same_name(name: str, project: str) -> bool:
+    return re.sub(r"[^a-z0-9]+", "-", project.lower()).strip("-") == name
+
+
 def session_list(
-    rows: list[tuple[str, str, str]], peers: list[tuple[str, str]] | None = None, more: int = 0, reach: str = ""
+    rows: list[tuple[str, str, str, float, str]],
+    peers: list[tuple[str, str]] | None = None,
+    more: int = 0,
+    reach: str = "",
 ) -> str:
-    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE. peers are other agents
-    in the project as (name, state), already capped; `more` is how many were left out and `reach` is
-    a name that can be typed to message one of them."""
+    """rows are (name, project, state, seconds in that state, what to type to answer it). Grouped as the
+    History pane groups them, the longest wait first; the project is left out when it is the name. peers
+    are other agents in the project as (name, state), already capped; `more` is how many were left out and
+    `reach` is a name that can be typed to message one of them."""
     peers = peers or []
     if not rows and not peers:
         return no_sessions()
-    parts = []
+    lines, number = [], 0
     if rows:
-        parts.append(f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:")
-        parts.extend(f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1))
+        lines.append(f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:")
     else:
-        parts.append("No remote sessions are running.")
+        lines.append("No remote sessions are running.")
+    waiting = sorted((r for r in rows if r[2] == WAITING), key=lambda r: -r[3])
+    groups = (
+        ("Needs you:", waiting),
+        ("Working:", [r for r in rows if r[2] == WORKING]),
+        ("Idle:", [r for r in rows if r[2] == IDLE]),
+        ("Not running:", [r for r in rows if r[2] in (SLEEPING, FAILED)]),
+    )
+    for title, group in groups:
+        if group:
+            lines.append(title)
+        for name, project, state, seconds, _ in group:
+            number += 1
+            where = "" if _same_name(name, project) else f" {DOT} {project}"
+            if state in (SLEEPING, FAILED):
+                lines.append(f"{number}. {name}{where} {DOT} {state}")
+                continue
+            lead = "waiting " if state == WAITING else ""
+            lines.append(f"{number}. {name}{where} {DOT} {lead}{elapsed_words(seconds)}")
     if peers:
-        parts.append("\nOther agents in this project:")
-        parts.extend(f"- {name} {DOT} {state}" for name, state in peers)
+        lines.append("\nOther agents in this project:")
+        lines.extend(f"- {name} {DOT} {state}" for name, state in peers)
         if more:
-            parts.append(f"- {more} more.")
+            lines.append(f"- {more} more.")
     options = []
-    if rows:
-        waiting = next((name for name, _, state in rows if state == WAITING), None)
-        options.append(
-            f"`{waiting}: your answer` to answer the one that is waiting."
-            if waiting
-            else f"`{rows[0][0]}: your request` to talk to a session."
-        )
-        options.append(f"`status {rows[0][0]}` for details.")
-    else:
+    if waiting:
+        name, answer = waiting[0][0], waiting[0][4]
+        what = "to allow once." if answer == "allow" else "to answer the longest-waiting one."
+        options.append(f"`{name}: {answer}` {what}")
+    elif not rows:
         options.append("Send a request and it starts a new session.")
+    else:
+        asleep = next((r[0] for r in rows if r[2] == SLEEPING), None)
+        if asleep:
+            options.append(f"`{asleep}: your message` to wake it.")
     if peers:
         options.append(f"`@gator {reach or peers[0][0]} your message` to message another agent.")
-    if rows:
-        options.append("`stop all` to stop everything and turn Remote control off.")
-    return system_reply("\n".join(parts), options)
+    return system_reply("\n".join(lines), options)
 
 
 def peer_label(name: str) -> str:
@@ -420,8 +441,9 @@ def session_status(
         text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
     else:
         lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
-        text = f"{lead} since {clock_time(since)}.\n{last}"
-        options = ["Reply here to talk to it.", f"`stop {session}` to stop it."]
+        text, options = f"{lead} since {clock_time(since)}.", []
+        if clock_time(last_activity) != clock_time(since):
+            text += f"\n{last}"
     return agent_reply(session, text, options, project=project, several=several)
 
 

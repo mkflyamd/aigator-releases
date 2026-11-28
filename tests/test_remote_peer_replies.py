@@ -474,3 +474,34 @@ async def test_the_hint_uses_the_id_when_the_name_starts_with_a_command_word(tmp
     w.host.last[e["pty_id"]] = "Which one?\n1. yes\n2. no"
     await w.runner.tick()
     assert f"`@gator {e['session_id'][:8]} yes`" in w.channel.posted[0]
+
+
+# ---------------------------------------------------------------- another agent's permission prompt
+
+async def test_a_peers_permission_prompt_is_never_offered_for_an_answer_from_chat(pw):
+    from remote import prompts
+    from tests.test_remote_prompts import BASH_PERMISSION
+
+    await sent(pw)
+    pw.host.prompts[PEER_PTY] = prompts.parse(BASH_PERMISSION, pw.clock.now + 1.0)
+    answer(pw, "asking", "Run echo?")
+    await pw.runner.tick()
+    reply = pw.channel.posted[0]
+    assert reply.startswith(f"[{commands.CROC} MergeBrain - Budget]")
+    assert "`allow`" not in reply and "Tool: Bash" not in reply
+    assert pw.service.watched(ADOPTED)[0].prompt is None
+
+
+async def test_an_answer_cannot_be_typed_into_an_adopted_sessions_prompt(svc):
+    from remote import prompts
+    from remote.service import Refusal
+    from tests.test_remote_prompts import BASH_PERMISSION
+
+    service, host, clock, _ = svc
+    session = adopt(service)
+    host.prompts["p-1"] = prompts.parse(BASH_PERMISSION, clock.now + 1.0)
+    host.states["p-1"] = {"state": "asking", "at": clock.now + 1.0}
+    session.prompt = host.prompts["p-1"]
+    with pytest.raises(Refusal):
+        await service.answer(session.id, "allow")
+    assert host.typed == []

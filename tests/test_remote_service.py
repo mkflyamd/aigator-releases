@@ -1,8 +1,9 @@
 import pytest
 
+from remote import prompts
 from remote.guard import Guard
-from remote.service import Event, RemoteError, RemoteService
-from remote.session_host import HostError, HostSession, Project
+from remote.service import PROMPT_GRACE_SECONDS, Event, PromptGone, PromptRefused, RemoteError, RemoteService
+from remote.session_host import HostError, HostSession, Project, StalePrompt
 
 
 class FakeHost:
@@ -15,6 +16,8 @@ class FakeHost:
         self.alive_ids = set()
         self.states = {}
         self.last = {}
+        self.prompts = {}
+        self.typed = []
         self.delivered = []
         self.killed = []
         self.fail_deliver = None
@@ -75,6 +78,18 @@ class FakeHost:
 
     async def output(self, pty_id, since):
         return ("out", since + 3)
+
+    async def prompt(self, pty_id):
+        return self.prompts.get(pty_id)
+
+    async def answer(self, pty_id, prompt_id, keys, ends_turn=False):
+        shown, state = self.prompts.get(pty_id), self.states.get(pty_id)
+        if shown is None or shown.id != prompt_id or not state or state["state"] != "asking":
+            raise StalePrompt("That prompt is no longer showing.")
+        self.typed.append((pty_id, keys))
+        del self.prompts[pty_id]
+        if ends_turn:
+            self.states[pty_id] = {"state": "idle", "at": state["at"] + 1}
 
 
 class Clock:
@@ -188,6 +203,8 @@ async def test_input_required_event_when_the_agent_asks(svc, host, clock):
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
     host.last["pty-1"] = "May I run rm?"
     await svc.tick()
+    clock.now += PROMPT_GRACE_SECONDS
+    await svc.tick()
     assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
     await svc.tick()
     assert len(svc.events) == 1
@@ -268,3 +285,101 @@ async def test_activity_resets_the_idle_clock(svc, host, clock):
 async def test_output_delegates_with_a_cursor(svc):
     s = await svc.start(BUDGET, "a")
     assert await svc.output(s.id, 4) == ("out", 7)
+
+
+# ---------------------------------------------------------------- permission and question prompts
+
+BASH_CALL = {"tool_name": "Bash", "cwd": "C:/repo/budget", "tool_input": {"command": "echo hi"}}
+
+
+def _asking(host, clock, payload=BASH_CALL, at=1):
+    host.states["pty-1"] = {"state": "asking", "at": clock.now + at}
+    host.prompts["pty-1"] = prompts.parse(payload, clock.now + at)
+    host.last["pty-1"] = "a transcript line that must not be posted"
+
+
+async def test_a_prompt_event_carries_the_prompt_and_not_the_transcript(svc, host, clock):
+    await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    [event] = svc.events
+    assert event.kind == "input-required" and event.text == ""
+    assert event.session.waiting and event.session.prompt is host.prompts["pty-1"]
+
+
+async def test_an_ask_without_a_prompt_file_still_posts_the_transcript(svc, host, clock):
+    await svc.start(BUDGET, "a")
+    host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
+    host.last["pty-1"] = "May I run rm?"
+    await svc.tick()
+    assert svc.events == []
+    clock.now += PROMPT_GRACE_SECONDS
+    await svc.tick()
+    assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
+    assert svc.list()[0].prompt is None
+
+
+async def test_an_answer_types_its_keys_and_returns_the_confirmation(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    result = await svc.answer(session.id, "allow")
+    assert host.typed == [("pty-1", (prompts.ENTER,))]
+    assert result.done == "Allowed once." and not result.ends_turn
+    assert not session.waiting and session.prompt is None
+    assert session.awaiting_since is not None
+
+
+async def test_a_denied_answer_ends_the_turn_so_no_done_is_posted_later(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    result = await svc.answer(session.id, "deny")
+    assert result.ends_turn and session.awaiting_since is None
+    await svc.tick()
+    assert [e.kind for e in svc.events] == ["input-required"]
+
+
+async def test_a_reply_that_is_not_an_answer_types_nothing_and_keeps_waiting(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    with pytest.raises(PromptRefused) as refused:
+        await svc.answer(session.id, "sure, go for it")
+    assert host.typed == [] and session.waiting and session.prompt is not None
+    assert refused.value.prompt is session.prompt
+
+
+async def test_an_answer_to_a_prompt_that_changed_types_nothing_and_says_gone(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    _asking(host, clock, {**BASH_CALL, "tool_input": {"command": "rm -rf build"}}, at=5)
+    with pytest.raises(PromptGone):
+        await svc.answer(session.id, "allow")
+    assert host.typed == [] and not session.waiting and session.prompt is None
+
+
+async def test_an_answer_after_it_was_answered_locally_says_gone(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    host.states["pty-1"] = {"state": "working", "at": clock.now + 2}
+    with pytest.raises(PromptGone):
+        await svc.answer(session.id, "allow")
+    assert host.typed == []
+
+
+async def test_answering_a_session_that_shows_no_prompt_is_an_error(svc, host):
+    session = await svc.start(BUDGET, "a")
+    with pytest.raises(RemoteError):
+        await svc.answer(session.id, "allow")
+    assert host.typed == []
+
+
+async def test_a_send_clears_the_prompt(svc, host, clock):
+    session = await svc.start(BUDGET, "a")
+    _asking(host, clock)
+    await svc.tick()
+    await svc.send(session.id, "something else")
+    assert session.prompt is None and not session.waiting

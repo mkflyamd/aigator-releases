@@ -13,6 +13,7 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
+PROMPT_MESSAGES_KEEP = 50
 LANE_STATES = ("live", "sleeping", "failed")
 MASTER_KEY = "master"
 READ_TRIES = 4
@@ -163,6 +164,39 @@ class State:
         with self._lock:
             ids = (self._peek().get(channel) or {}).get("posted_ids", [])
         return message_id in ids
+
+    def record_prompt_message(
+        self, channel: str, message_id: str, session_id: str, prompt_id: str, expires_at: float, now: float
+    ) -> None:
+        """Which posted message asked which session's prompt. Only recorded; nothing reads it to route a reply yet."""
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            kept = [
+                m
+                for m in entry.get("prompt_messages", [])
+                if isinstance(m, dict) and m.get("expires_at", 0) > now and m.get("message_id") != message_id
+            ]
+            kept.append(
+                {"message_id": message_id, "session_id": session_id, "prompt_id": prompt_id, "expires_at": expires_at}
+            )
+            entry["prompt_messages"] = kept[-PROMPT_MESSAGES_KEEP:]
+            self._save(data)
+
+    def clear_prompt_messages(self, channel: str, session_id: str) -> None:
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            before = entry.get("prompt_messages", [])
+            after = [m for m in before if not (isinstance(m, dict) and m.get("session_id") == session_id)]
+            if len(after) != len(before):
+                entry["prompt_messages"] = after
+                self._save(data)
+
+    def prompt_messages(self, channel: str) -> list[dict]:
+        with self._lock:
+            found = (self._load().get(channel) or {}).get("prompt_messages", [])
+        return [m for m in found if isinstance(m, dict)]
 
     def lanes(self, channel: str) -> dict[str, dict]:
         """The channel's lanes by project id. A lane is the project's one remote session, live or

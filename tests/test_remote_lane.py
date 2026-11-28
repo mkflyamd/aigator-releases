@@ -54,7 +54,7 @@ async def test_list_and_status_say_sleeping(w):
     await asleep(w)
     await w.runner.tick()
     await w.feed(w.msg(102, "@gator list"))
-    assert "1. budget · Budget · sleeping" in w.channel.posted[-1]
+    assert "1. budget · sleeping" in w.channel.posted[-1]
     await w.feed(w.msg(103, "@gator status budget"))
     assert w.channel.posted[-1] == commands.session_status(
         "budget", "sleeping", w.clock.now, w.clock.now, project="Budget"

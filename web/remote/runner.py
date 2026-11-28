@@ -13,13 +13,24 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from remote import commands
+from remote import commands, prompts
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote import master as master_window
 from remote.guard import Guard, limit
 from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
 from remote.master import Master
-from remote.service import ADOPTED, Aborted, Asleep, Event, Refusal, RemoteError, RemoteService, Session
+from remote.service import (
+    ADOPTED,
+    Aborted,
+    Asleep,
+    Event,
+    PromptGone,
+    PromptRefused,
+    Refusal,
+    RemoteError,
+    RemoteService,
+    Session,
+)
 from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
@@ -30,6 +41,8 @@ _log = logging.getLogger(__name__)
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = commands.WAITING_HEADLINE
+PROMPT_ROUTE_SECONDS = 12 * 3600.0
+PROMPT_HOLD_SECONDS = 2 * 3600.0
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
@@ -76,6 +89,7 @@ class RemoteRunner:
         self._branch_of = branch_of
         self._peers = peers
         self._turns: dict[str, _Turn] = {}
+        self._holds: dict[str, tuple[str, float]] = {}
         self._enabled = False
         self._stop_failure_logged: float | None = None
         self._autosend_noticed = False
@@ -131,15 +145,17 @@ class RemoteRunner:
         if not self._window.is_open():
             await self._post(commands.online())
 
-    async def _post(self, text: str) -> None:
+    async def _post(self, text: str) -> str:
+        """The id of the posted message, or "" when nothing was posted."""
         try:
-            await asyncio.to_thread(self._channel.post, text)
+            return await asyncio.to_thread(self._channel.post, text) or ""
         except AutosendOff:
             if not self._autosend_noticed:
                 self._autosend_noticed = True
                 _log.info("Remote control is not replying on %s: auto-send is off", self._channel.name)
         except Exception as exc:
             _log.warning("Remote control could not post a reply: %s", exc)
+        return ""
 
     async def poll(self) -> None:
         await self.process(await asyncio.to_thread(self._channel.poll))
@@ -176,7 +192,7 @@ class RemoteRunner:
                     self._not_sent_noticed.clear()
             elif command.kind not in ("stop_all", "bye"):
                 self._window.extend()
-            await self._run(command)
+            await self._run(dataclasses.replace(command, sent_at=message.created_at))
         if skipped:
             await self._post(commands.stale_skipped(skipped, limit(self._stale)))
 
@@ -226,8 +242,23 @@ class RemoteRunner:
         self._not_sent_noticed.add(reason)
         await self._post(reply())
 
+    def _anyone_waiting(self) -> bool:
+        """True while some session shows a prompt, for at most PROMPT_HOLD_SECONDS each. A session that only
+        sounds like it asked something has no prompt and does not keep the chat open."""
+        now = self._clock()
+        holds, held = {}, False
+        for session in self._service.list():
+            if session.prompt is None:
+                continue
+            seen_id, since = self._holds.get(session.id, ("", now))
+            since = since if seen_id == session.prompt.id else now
+            holds[session.id] = (session.prompt.id, since)
+            held = held or now - since < PROMPT_HOLD_SECONDS
+        self._holds = holds
+        return held
+
     async def _close_if_expired(self) -> None:
-        if self._window.expired():
+        if self._window.expired() and not self._anyone_waiting():
             self._window.close()
             await self._post(commands.chat_closed_quiet())
 
@@ -270,7 +301,7 @@ class RemoteRunner:
         elif kind == "stop_all":
             await self._stop_all()
         else:
-            await self._send(command.text, command.tagged)
+            await self._send(command.text, command.tagged, command.sent_at)
 
     async def _stop_all(self) -> None:
         stopped, failed = await self._service.stop_all()
@@ -298,6 +329,11 @@ class RemoteRunner:
                 raise Refusal(commands.no_sessions())
             raise Refusal(commands.which_to_stop([s.short for s in sessions]))
         return sessions
+
+    def _since(self, session: Session) -> float:
+        if session.waiting:
+            return session.last_event_at or session.last_activity
+        return session.awaiting_since if session.awaiting_since is not None else session.last_activity
 
     def _reserved(self) -> frozenset[str]:
         return _RESERVED_NAMES | {s.short for s in self._service.list()}
@@ -329,7 +365,7 @@ class RemoteRunner:
             shown = commands.peer_label(peer.name) if by_name else f"{commands.peer_label(peer.name)} ({peer.short})"
             rows.append((shown, peer.state))
         return commands.session_list(
-            [(s.short, s.project.name, _state_word(s)) for s in self._service.list()],
+            self._session_rows(self._service.list()),
             rows,
             max(0, len(peers) - commands.PEERS_SHOWN),
             reach,
@@ -376,20 +412,28 @@ class RemoteRunner:
                 _log.warning("could not watch %s for its reply; the message was delivered", peer.name)
         await self._post(commands.peer_sent(peer.name, delivery.woke))
 
+    def _session_rows(self, sessions: list[Session]) -> list[tuple[str, str, str, float, str]]:
+        now = self._clock()
+        return [
+            (s.short, s.project.name, _state_word(s), now - self._since(s), prompts.answer_word(s.prompt))
+            for s in sessions
+        ]
+
     def _describe(self, sessions: list[Session]) -> str:
-        return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
+        return commands.session_list(self._session_rows(sessions))
 
     def _status(self, name: str | None) -> str:
         sessions = self._pick(name)
         if len(sessions) != 1:
             return self._describe(sessions)
         s = sessions[0]
-        since = s.awaiting_since if s.awaiting_since is not None else s.last_activity
+        if s.prompt is not None:
+            return prompts.waiting_message(s.short, s.project.name, s.prompt)
         return commands.session_status(
-            s.short, _state_word(s), since, s.last_activity, project=s.project.name, several=self._several(s)
+            s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
         )
 
-    async def _send(self, text: str, tagged: bool = True) -> None:
+    async def _send(self, text: str, tagged: bool = True, sent_at: float = 0.0) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
         waiting session if exactly one waits, else the only running one, else a new session in the
         default project. Another agent in the project is reached by its name, and only when the message
@@ -401,7 +445,7 @@ class RemoteRunner:
             if session is not None:
                 if not rest:
                     raise Refusal(commands.mention_needs_text(session.short))
-                await self._deliver(session, rest)
+                await self._deliver(session, rest, sent_at)
                 return
             if name.lower() not in _TAGS:
                 if tagged and await self._try_peer(text):
@@ -415,7 +459,7 @@ class RemoteRunner:
         first, _, rest = text.partition(" ")
         named = self._service.resolve(first.rstrip(":"))
         if named is not None and rest.strip():
-            await self._deliver(named, rest.strip())
+            await self._deliver(named, rest.strip(), sent_at)
             return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
@@ -424,9 +468,9 @@ class RemoteRunner:
         if tagged and await self._try_peer(text, colon_only=bool(waiting)):
             return
         if len(waiting) == 1:
-            await self._deliver(waiting[0], text)
+            await self._deliver(waiting[0], text, sent_at)
         elif len(sessions) == 1:
-            await self._deliver(sessions[0], text)
+            await self._deliver(sessions[0], text, sent_at)
         elif sessions:
             raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
@@ -436,9 +480,13 @@ class RemoteRunner:
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
-    async def _deliver(self, session: Session, text: str) -> None:
+    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0) -> None:
         if await self._service.needs_wake(session):
             await self._start_wake(session, text)
+            return
+        await self._service.refresh(session.id)
+        if session.waiting and session.prompt is not None:
+            await self._answer(session, text, sent_at)
             return
         try:
             await self._service.send(session.id, text)
@@ -449,7 +497,33 @@ class RemoteRunner:
             raise
         except RemoteError as exc:
             raise Refusal(self._lane_copy(commands.send_failed, session, str(exc))) from exc
+        self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
+
+    async def _answer(self, session: Session, text: str, sent_at: float = 0.0) -> None:
+        """A reply to a session that is showing a permission or a question: typed as that answer, or
+        not typed at all, and said so."""
+        short, project = session.short, session.project.name
+        try:
+            result = await self._service.answer(session.id, text, sent_at)
+        except PromptRefused as exc:
+            raise Refusal(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
+        except PromptGone as exc:
+            self._state.clear_prompt_messages(self._channel.name, session.id)
+            raise Refusal(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED)) from exc
+        self._state.clear_prompt_messages(self._channel.name, session.id)
+        if not result.ends_turn:
+            self._begin(session)
+        await self._post(prompts.confirmation(short, project, result.done))
+
+    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> None:
+        """One message for this session, remembered by its message id with the prompt and an expiry."""
+        message_id = await self._post(prompts.waiting_message(session.short, session.project.name, prompt))
+        if message_id:
+            now = self._clock()
+            self._state.record_prompt_message(
+                self._channel.name, message_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
+            )
 
     async def _start_wake(self, session: Session, text: str) -> None:
         """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
@@ -514,7 +588,10 @@ class RemoteRunner:
         short = session.short
         several = self._several(session)
         project = session.project.name
-        if event.kind in ("completed", "input-required"):
+        self._state.clear_prompt_messages(self._channel.name, session.id)
+        if event.kind == "input-required" and session.prompt is not None:
+            await self._post_prompt(session, session.prompt)
+        elif event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
             if waiting:
@@ -579,6 +656,8 @@ class RemoteRunner:
         elif self.live:
             await self._warn_if_due()
         if self.live:
+            if self._anyone_waiting():
+                self._window.hold()
             await self._close_if_expired()
             await self._report_progress()
         await self._service.tick()
