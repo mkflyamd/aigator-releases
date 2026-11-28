@@ -43,6 +43,8 @@ class _Turn:
 
 
 def _state_word(session: Session) -> str:
+    if session.state in (commands.SLEEPING, commands.FAILED):
+        return session.state
     if session.waiting:
         return commands.WAITING
     return commands.WORKING if session.awaiting_since is not None else commands.IDLE
@@ -75,6 +77,7 @@ class RemoteRunner:
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
         self._not_sent_noticed: set[str] = set()
+        self._wakes: set[asyncio.Task] = set()
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -302,8 +305,32 @@ class RemoteRunner:
             self._begin(await self._service.start(project, prompt))
 
     async def _deliver(self, session: Session, text: str) -> None:
+        if await self._service.needs_wake(session):
+            await self._start_wake(session, text)
+            return
         await self._service.send(session.id, text)
         self._begin(session)
+
+    async def _start_wake(self, session: Session, text: str) -> None:
+        """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
+        must keep running. begin_wake refuses a second wake of the same lane and one too soon after
+        a failure, so a burst of messages cannot start more than one."""
+        self._service.begin_wake(session)
+        await self._post(self._lane_copy(commands.waking, session))
+        task = asyncio.create_task(self._wake(session, text))
+        self._wakes.add(task)
+        task.add_done_callback(self._wakes.discard)
+
+    async def _wake(self, session: Session, text: str) -> None:
+        try:
+            await self._service.wake(session, text, proceed=lambda: self._guard.armed)
+        except RemoteError as exc:
+            await self._post(self._lane_copy(commands.wake_failed, session, str(exc)))
+        except Exception:
+            _log.warning("Remote wake of %s failed", session.short, exc_info=True)
+            await self._post(self._lane_copy(commands.wake_failed, session, "The session could not be woken."))
+        else:
+            self._begin(session)
 
     def _begin(self, session: Session) -> None:
         now = self._clock()
@@ -333,8 +360,13 @@ class RemoteRunner:
             await self._post(commands.agent_exited(short, project=project, several=several))
         elif event.kind == "canceled":
             await self._post(commands.agent_stopped(short, project=project, several=several))
+        elif event.kind == "lost":
+            await self._post(commands.lane_lost(short, project=project, several=several))
         else:
             await self._post(commands.working_ack(short, event.kind, project=project, several=several))
+
+    def _lane_copy(self, build, session: Session, *args: str) -> str:
+        return build(session.short, *args, project=session.project.name, several=self._several(session))
 
     def _several(self, session: Session) -> bool:
         """True while more than one session is live, counting one that has just left the table."""

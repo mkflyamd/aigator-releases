@@ -43,10 +43,22 @@ Owns headless sessions. A remote session is a PTY registered in `web/routes/term
 - Session ids are opaque (`pty:<uuid>`), and the vendor session id (Claude, Crush, Codex, OpenCode) is stored beside each one, so a session can be resumed with `agent_sessions.find_session` after a backend restart. Several agents can run per project.
 - Internal event bus names events by A2A task state: `submitted`/`working` (agent started or busy), `input-required` (agent is asking the user), `completed` (the agent finished that turn), `failed` or `canceled` (process exited or was stopped). The command layer subscribes to post replies.
 - `SessionHost` and `LocalPtyHost` live in their own module (`web/remote/session_host.py`), so the cross-agent relay's terminal adapter can wrap them later.
-- Pinned sessions are exempt from the viewer-based reaper. A pinned session ends on `stop`, process exit, or after `remote_session_idle_hours` (default 8) with no input or output.
+- Pinned sessions are exempt from the viewer-based reaper. A pinned session ends on `stop`, process exit, or after `remote_session_idle_hours` (default 8) with no input or output. The idle-suspend sweep treats them like any other agent terminal (see Lanes).
+- A pinned remote terminal is never the project's tracked session, so a local cold open of the project does not reattach to it.
 - Opening the Code tab on a pinned session attaches to it and replays `output_buf`, as it does today.
 - Restart survival: the PTY host keeps the PTYs running when the backend restarts. At spawn each remote session is labelled on the host with its channel, short name and start time, beside the existing `remote_pinned`, `project_id` and vendor `session_id` labels. After a restart the service rebuilds its sessions from those labels, keeping those of its own channel whose project still exists and whose process has not exited, and the command layer waits for that before running any command. If the host does not answer, nothing is rebuilt and the next poll tries again; this is reported as a host error, never as "no sessions".
 - Closing a terminal in the Code tab is refused with an error, and the session left open, when the host cannot be asked whether the terminal is a remote session.
+
+#### Lanes
+
+A project has one lane: its one remote session, never two. A lane is stored in `remote_control_state.json` (project id, vendor session id, short name, last activity, state) and survives a backend restart. Its state is `live`, `sleeping` or `failed`.
+
+- The idle-suspend sweep (`web/agent_suspend.py`) suspends an idle remote terminal like any other: it saves the session id, then closes the process. The lane turns `sleeping`; `list` and `status` say so, and the tick never posts "The agent process exited." for it.
+- The next `@gator` message to a sleeping lane answers at once ("Waking up") and wakes the session by its own id through the same resume path as wake-on-ping, in a background task, so polling never waits. A lane wakes at most once at a time and not again within 30 seconds of a failed wake. The message is typed once the session takes input. The arm cap and idle expiry apply as for any command: nothing wakes while remote control is off, and a wake that finishes after remote control was turned off sends nothing.
+- A wake never starts a fresh session. A failure is reported in the chat and the lane stays asleep to retry. A failure that cannot clear (the stored session or its project is gone) marks the lane `failed`; `stop <name>` clears it, and the next message then starts a new session.
+- A session that is live in another terminal (for example resumed in the Code tab), or that someone is typing in or has open in AI Gator, is not woken or typed at; the chat gets a clear reply instead. Two processes never share one session id.
+- Claude asks how to resume a large old session (from a summary or in full) before it takes input. That prompt is never answered for the user: the terminal is closed again, the lane stays asleep, and the chat says to resume the session once from the Code tab and choose there.
+- `stop`, `stop all` and idle expiry close the lane cleanly, sleeping or failed ones included: the saved record is dropped, so nothing is left to resume.
 
 `SessionHost` is the interface the service calls for spawn, write, read-output, kill and liveness. `LocalPtyHost` wraps the existing PTY registry. A later server tier adds another host without touching the service or API.
 
@@ -193,6 +205,7 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 6. Gator posts only into the user's own self-chat, verified before each post and only while the auto-send gate is on, and its own posts never trigger a command, by prefix and by recorded message id.
    6a. A remote session survives a backend restart. `@gator list` shows it under the same short name and `@gator <name> <text>` reaches it. Sessions that have exited are dropped.
    6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
+   6c. An idle remote session is suspended to free memory and the next `@gator` message wakes it by session id, with an immediate acknowledgement, without starting a second session and without blocking the polling loop. `list` and `status` show it as sleeping.
 7. Every new mutating route uses `verify_csrf`, and `tests/test_csrf_route_inventory.py` passes with no baseline changes.
 8. Opening the Code tab later attaches to the live session and shows its recent output.
 9. The existing `/code` OpenCode path still works until slice 1 lands.

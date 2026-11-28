@@ -478,6 +478,7 @@ CROC_KEYS = {"greeting", "bye", "closed"}
 AGENT_KEYS = {
     "status", "working", "progress", "done", "done_empty", "done_long",
     "waiting_choices", "waiting_open", "agent_stopped", "agent_exited",
+    "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
 NO_NEXT_KEYS = {"done", "waiting_open", "progress"}
@@ -522,6 +523,12 @@ def _deck():
         "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
         "agent_stopped": commands.agent_stopped("budget"),
         "agent_exited": commands.agent_exited("budget"),
+        "list_sleeping": commands.session_list([("budget", "Budget", commands.SLEEPING)]),
+        "status_sleeping": commands.session_status("budget", commands.SLEEPING, 1000.0, 2000.0),
+        "status_failed": commands.session_status("budget", commands.FAILED, 1000.0, 2000.0),
+        "waking": commands.waking("budget"),
+        "wake_failed": commands.wake_failed("budget", "The session could not be woken."),
+        "lane_lost": commands.lane_lost("budget"),
     }
 
 

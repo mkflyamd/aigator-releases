@@ -35,6 +35,7 @@ WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
 ACK_DELAY_SECONDS = 15.0
 PROGRESS_SECONDS = 120.0
 ELAPSED_MIN_SECONDS = 60.0
+SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
 OWN_MESSAGE_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
@@ -288,11 +289,16 @@ def mention_needs_text(name: str) -> str:
 def session_status(
     session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
 ) -> str:
-    lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
-    text = f"{lead} since {clock_time(since)}.\nLast activity {clock_time(last_activity)}."
-    return agent_reply(
-        session, text, ["Reply here to talk to it.", f"`stop {session}` to stop it."], project=project, several=several
-    )
+    last = f"Last activity {clock_time(last_activity)}."
+    if state == SLEEPING:
+        text, options = f"Asleep to free memory.\n{last}", ["Reply here to wake it.", f"`stop {session}` to stop it."]
+    elif state == FAILED:
+        text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
+    else:
+        lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
+        text = f"{lead} since {clock_time(since)}.\n{last}"
+        options = ["Reply here to talk to it.", f"`stop {session}` to stop it."]
+    return agent_reply(session, text, options, project=project, several=several)
 
 
 def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
@@ -341,6 +347,33 @@ def asks_a_question(text: str) -> bool:
 def agent_stopped(session: str, *, project: str | None = None, several: bool = False) -> str:
     options = ["Send a message to start it again.", "`list` to see what is running."]
     return agent_reply(session, "Stopped.", options, project=project, several=several)
+
+
+def waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """Posted the moment a message reaches a sleeping session, before the wake finishes."""
+    return agent_reply(
+        session,
+        "Waking up. Your message goes in once it is ready.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def wake_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        f"Nothing was sent.\n{reason}",
+        [f"Send your message again to retry, or `stop {session}`."],
+        project=project,
+        several=several,
+    )
+
+
+def lane_lost(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, "The saved session is gone.", ["Send a message to start a new session."], project=project, several=several
+    )
 
 
 def agent_exited(session: str, *, project: str | None = None, several: bool = False) -> str:

@@ -174,16 +174,31 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         return await _open_terminal(req)
 
 
-async def resume_suspended(req: GenericAgentTerminalRequest, pty_id: str, woken_by: str, woken_preview: str = "") -> dict:
+async def resume_suspended(
+    req: GenericAgentTerminalRequest,
+    pty_id: str,
+    woken_by: str,
+    woken_preview: str = "",
+    labels: dict[str, str] | None = None,
+) -> dict:
     """Resume a suspended session under its old terminal id, so a tab still holding
     that id reattaches. Returns the terminal, or the live one when the session is
-    already running."""
+    already running (`created` is False then). `labels` makes the terminal a pinned
+    remote-control one again, with the labels it was started with."""
     async with _resume_lock:
-        return await _open_terminal(req, reuse_pty_id=pty_id, woken_by=woken_by, woken_preview=woken_preview)
+        return await _open_terminal(
+            req,
+            reuse_pty_id=pty_id,
+            woken_by=woken_by,
+            woken_preview=woken_preview,
+            pinned=labels is not None,
+            extra_labels=labels,
+        )
 
 
 async def open_pinned_terminal(req: GenericAgentTerminalRequest, labels: dict[str, str] | None = None) -> dict:
-    """A new terminal for remote control: labelled so the idle-suspend sweep never takes it.
+    """A new terminal for remote control: a Code tab closing never ends it, and it is never the
+    project's tracked session, so a local cold open does not reattach to it.
     `labels` are kept by the PTY host beside the session, so a restarted backend can find it."""
     return await _open_terminal(req, pinned=True, extra_labels=labels)
 
@@ -396,7 +411,8 @@ async def _open_terminal(
         meta=owner,
         **size,
     )
-    generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
+    if not pinned:
+        generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
     result = {"pty_session_id": pty_session_id, "created": True}
     if handoff is not None:
         agent_handoff.log_event(

@@ -1,4 +1,5 @@
-"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window."""
+"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window,
+and each channel's lanes (one remote session per project, live, sleeping or failed)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
+LANE_STATES = ("live", "sleeping", "failed")
 
 
 def default_path() -> Path:
@@ -102,3 +104,40 @@ class State:
         with self._lock:
             ids = (self._load().get(channel) or {}).get("posted_ids", [])
         return message_id in ids
+
+    def lanes(self, channel: str) -> dict[str, dict]:
+        """The channel's lanes by project id. A lane is the project's one remote session, live or
+        asleep; it outlives the process and a backend restart."""
+        with self._lock:
+            stored = (self._load().get(channel) or {}).get("lanes")
+        if not isinstance(stored, dict):
+            return {}
+        return {pid: lane for pid, lane in stored.items() if _valid_lane(pid, lane)}
+
+    def put_lane(self, channel: str, lane: dict) -> None:
+        """Adds the lane, or replaces the one the project already has: never two per project."""
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            lanes = entry.get("lanes")
+            if not isinstance(lanes, dict):
+                lanes = entry["lanes"] = {}
+            if lanes.get(lane["project_id"]) != lane:
+                lanes[lane["project_id"]] = lane
+                self._save(data)
+
+    def drop_lane(self, channel: str, project_id: str) -> None:
+        with self._lock:
+            data = self._load()
+            lanes = self._channel(data, channel).get("lanes")
+            if isinstance(lanes, dict) and lanes.pop(project_id, None) is not None:
+                self._save(data)
+
+
+def _valid_lane(project_id: str, lane) -> bool:
+    return (
+        isinstance(lane, dict)
+        and lane.get("project_id") == project_id
+        and all(isinstance(lane.get(k), str) and lane[k] for k in ("pty_id", "short", "repo_path"))
+        and lane.get("state") in LANE_STATES
+    )
