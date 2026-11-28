@@ -298,15 +298,26 @@ class RemoteRunner:
             return False
         if found.peer is None:
             first = found.candidates[0]
+            await self._audit_refusal(first.name, "ambiguous_name", "Several agents share that name.", text)
             raise _Reply(commands.peer_ambiguous(first.name, [(p.short, p.state) for p in found.candidates]))
         await self._message_peer(found.peer, found.text)
         return True
+
+    async def _audit_refusal(self, peer_name: str, code: str, reason: str, text: str) -> None:
+        import agent_wake
+
+        sender = {"name": f"{self._channel.name.title()} chat"}
+        try:
+            await asyncio.to_thread(agent_wake.audit_refusal, sender, peer_name, code, reason, text)
+        except Exception:
+            _log.warning("could not audit a refused message to %s", peer_name, exc_info=True)
 
     async def _message_peer(self, peer: Peer, text: str) -> None:
         if not text:
             raise _Reply(commands.mention_needs_text(commands.peer_label(peer.name)))
         wait = self._peers.limiter.wait_seconds(peer.session_id)
         if wait:
+            await self._audit_refusal(peer.name, "peer_limit", "The hourly limit for that agent was reached.", text)
             raise _Reply(commands.peer_limit(peer.name, self._peers.limiter.limit, wait))
         try:
             woke = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")

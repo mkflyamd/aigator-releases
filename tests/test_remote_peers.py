@@ -13,6 +13,13 @@ from tests.test_remote_runner import BUDGET, World, baselined
 RESERVED = frozenset((*commands.RESERVED, "all", "gator", "claude"))
 
 
+@pytest.fixture(autouse=True)
+def audits(monkeypatch):
+    lines = []
+    monkeypatch.setattr(agent_wake, "audit_refusal", lambda *a: lines.append(a))
+    return lines
+
+
 def entry(title, session_id=None, state="live", pty="p", project="budget"):
     session_id = session_id or f"{title.replace(' ', '')}-0000-aaaa-bbbb".lower()
     return {
@@ -367,12 +374,13 @@ async def test_a_remote_session_wins_over_an_agent_with_the_same_name(tmp_path):
     assert w.host.delivered[-1][1] == "status please"
 
 
-async def test_two_agents_with_one_name_get_an_ambiguity_reply(tmp_path):
+async def test_two_agents_with_one_name_get_an_ambiguity_reply(tmp_path, audits):
     w = PeerWorld(tmp_path, entry("Memory", session_id="aaaaaaaa-1"), entry("Memory", session_id="bbbbbbbb-2"))
     await baselined(w)
     await w.say("@gator Memory hi")
     assert w.gateway.sent == []
     assert w.channel.posted == [commands.peer_ambiguous("Memory", [("aaaaaaaa", "live"), ("bbbbbbbb", "live")])]
+    assert [(a[0], a[1], a[2]) for a in audits] == [({"name": "Teams chat"}, "Memory", "ambiguous_name")]
     await w.say("@gator bbbbbbbb hi")
     assert [s[:2] for s in w.gateway.sent] == [("Memory", "hi")]
 
@@ -387,13 +395,14 @@ async def test_a_refusal_is_said_and_does_not_count(pw):
     assert len(pw.gateway.sent) == 1
 
 
-async def test_the_hourly_limit_stops_the_next_message_and_zero_lifts_it(tmp_path):
+async def test_the_hourly_limit_stops_the_next_message_and_zero_lifts_it(tmp_path, audits):
     w = PeerWorld(tmp_path, entry("MergeBrain"), limit=2)
     await baselined(w)
     for _ in range(3):
         await w.say("@gator MergeBrain hi")
     assert len(w.gateway.sent) == 2
     assert w.channel.posted[-1] == commands.peer_limit("MergeBrain", 2, 3600)
+    assert [(a[0], a[1], a[2]) for a in audits] == [({"name": "Teams chat"}, "MergeBrain", "peer_limit")]
     w.limit[0] = 0
     await w.say("@gator MergeBrain hi")
     assert len(w.gateway.sent) == 3
