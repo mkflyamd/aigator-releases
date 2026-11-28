@@ -18,6 +18,7 @@ _log = logging.getLogger(__name__)
 IDLE_SECONDS = 8 * 3600.0
 STARTED = "started"
 ADOPTED = "adopted"
+ADOPTED_MISSES = 2
 
 
 class RemoteError(Exception):
@@ -39,6 +40,7 @@ class Session:
     stopping: bool = False
     kind: str = STARTED  # ADOPTED: someone else's session that Remote only watches, never closes
     name: str = ""
+    misses: int = 0
 
 
 @dataclass(frozen=True)
@@ -246,13 +248,19 @@ class RemoteService:
             if session.stopping:
                 continue
             if not await self._host.alive(session.pty_id):
-                self._sessions.pop(session.id, None)
                 if session.kind == ADOPTED:
+                    # A slow terminal host also reads as "not alive"; one miss is not an exit.
+                    session.misses += 1
+                    if session.misses < ADOPTED_MISSES:
+                        continue
+                    self._sessions.pop(session.id, None)
                     if session.awaiting_since is not None:
                         await self._emit("detached", session, "The agent process exited.")
                 else:
+                    self._sessions.pop(session.id, None)
                     await self._emit("failed", session, "The agent process exited.")
                 continue
+            session.misses = 0
             if self._clock() - session.last_activity >= limit(self._idle):
                 if session.kind == ADOPTED:
                     self._sessions.pop(session.id, None)

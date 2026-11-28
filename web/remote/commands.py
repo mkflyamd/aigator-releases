@@ -300,7 +300,8 @@ def session_list(
 def peer_label(name: str) -> str:
     """A session name from outside this chat: one line, no brackets, capped. It is shown inside the
     `[name - project]` prefix, so it must not be able to end that prefix early or fake another one."""
-    return " ".join(name.replace("[", "(").replace("]", ")").split())[:NAME_MAX_CHARS]
+    one_line = " ".join(name.replace("[", "(").replace("]", ")").split())
+    return one_line.replace(" - ", " / ")[:NAME_MAX_CHARS]
 
 
 def peer_sent(name: str, woke: bool) -> str:
@@ -311,9 +312,11 @@ def peer_sent(name: str, woke: bool) -> str:
 def peer_prefix(name: str, project: str) -> str:
     """`[🐊 {peer} - {project}]`: an agent that is not Remote's own, labelled with its name and project.
     It starts with the crocodile marker, so the loop guard ignores it. A peer that carries Gator's own
-    name is told apart, so it cannot pass for Remote's agent."""
+    name, alone or followed by more words, is told apart so it cannot pass for Remote's agent."""
     label = peer_label(name)
-    if label.casefold() == settings.agent_name().casefold():
+    own = settings.agent_name().casefold()
+    folded = label.casefold()
+    if folded.startswith(own) and not folded[len(own) :][:1].isalnum():
         label = f"{label} (other agent)"
     return f"[{CROC} {label} - {peer_label(project)}]"
 

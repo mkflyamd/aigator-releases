@@ -97,8 +97,35 @@ async def test_a_session_that_exits_while_awaited_is_noted_not_killed(svc):
     adopt(service)
     host.alive_ids.clear()
     await service.tick()
+    await service.tick()
     assert host.killed == []
     assert [(e.kind, bool(e.text)) for e in events] == [("detached", True)]
+
+
+async def test_one_missed_alive_check_is_not_an_exit(svc):
+    service, host, clock, events = svc
+    adopt(service)
+    host.alive_ids.clear()
+    await service.tick()
+    assert events == []
+    host.alive_ids.add("p-1")
+    host.states["p-1"] = {"state": "idle", "at": clock.now + 5}
+    host.last["p-1"] = "the answer"
+    await service.tick()
+    assert [(e.kind, e.text) for e in events] == [("completed", "the answer")]
+
+
+async def test_a_recovered_session_needs_two_fresh_misses_to_be_dropped(svc):
+    service, host, clock, events = svc
+    adopt(service)
+    host.alive_ids.clear()
+    await service.tick()
+    host.alive_ids.add("p-1")
+    await service.tick()
+    host.alive_ids.clear()
+    await service.tick()
+    assert events == []
+    assert len(service.watched(ADOPTED)) == 1
 
 
 async def test_a_session_that_exits_with_nothing_awaited_is_dropped_quietly(svc):
@@ -106,6 +133,7 @@ async def test_a_session_that_exits_with_nothing_awaited_is_dropped_quietly(svc)
     session = adopt(service)
     session.awaiting_since = None
     host.alive_ids.clear()
+    await service.tick()
     await service.tick()
     assert events == []
     assert service.watched(ADOPTED) == []
@@ -213,12 +241,24 @@ def test_a_hostile_agent_name_cannot_break_the_prefix(name):
     assert first_line.startswith(f"[{commands.CROC} ") and first_line.count("]") == 1
 
 
-@pytest.mark.parametrize("name", ["Gator", "gator", "  GATOR "])
+@pytest.mark.parametrize(
+    "name", ["Gator", "gator", "  GATOR ", "Gator - x", "Gator - x - Budget", "gator-x", "Gator: helper"]
+)
 def test_a_peer_called_gator_cannot_pass_for_the_agent_itself(name):
     peer = commands.peer_result(name, "Budget", "hello")
-    own = commands.agent_reply("budget", "hello", [], project="Budget")
-    assert peer.split("]")[0] != own.split("]")[0]
-    assert "(other agent)" in peer.split("]")[0]
+    own = [
+        commands.agent_reply("budget", "hello", [], project="Budget"),
+        commands.agent_reply("x", "hello", [], project="Budget", several=True),
+        commands.agent_reply("x", "hello", [], project="x - Budget", several=True),
+    ]
+    head = peer.split("]")[0]
+    assert all(head != o.split("]")[0] for o in own)
+    assert "(other agent)" in head
+    assert head.count(" - ") == 1
+
+
+def test_a_peer_that_only_starts_like_the_agent_is_left_alone():
+    assert "(other agent)" not in commands.peer_result("Gatorade", "Budget", "hello")
 
 
 async def test_a_peer_reply_never_triggers_a_command(pw):
@@ -257,6 +297,7 @@ async def test_a_long_answer_is_trimmed(pw):
 async def test_an_agent_that_closes_before_answering_is_said_so(pw):
     await sent(pw)
     pw.host.alive_ids.clear()
+    await pw.runner.tick()
     await pw.runner.tick()
     assert pw.channel.posted == [commands.peer_exited("MergeBrain", "Budget")]
     assert pw.host.killed == []

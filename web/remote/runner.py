@@ -325,7 +325,10 @@ class RemoteRunner:
             raise _Reply(commands.peer_refused(peer.name, exc.reason)) from exc
         project = self._service.default_project()
         if project is not None:
-            self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
+            try:
+                self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
+            except RemoteError:
+                _log.warning("could not watch %s for its reply; the message was delivered", peer.name)
         await self._post(commands.peer_sent(peer.name, delivery.woke))
 
     def _describe(self, sessions: list[Session]) -> str:
