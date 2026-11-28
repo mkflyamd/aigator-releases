@@ -366,3 +366,11 @@ def test_switching_a_channel_on_opens_the_window_and_the_last_one_off_closes_it(
     assert c.get("/api/remote/status").json()["state"] == "on"
     c.patch("/api/config", json={"teams_remote_control_enabled": False})
     assert c.get("/api/remote/status").json()["expires_at"] is None
+
+
+def test_a_switch_on_with_no_window_says_how_to_turn_remote_control_on(tmp_path, rc_config):
+    state = State(tmp_path / "s.json")
+    snap = status.compute(state, Clock())
+    assert snap["state"] == "off"
+    assert snap["reason"] == "Remote control is not turned on. Arm it in Settings."
+    assert set(snap) == {"state", "reason", "channels", "armed_at", "expires_at", "now"}

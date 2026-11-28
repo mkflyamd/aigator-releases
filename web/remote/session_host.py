@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+import pty_client
+
 _log = logging.getLogger(__name__)
 
 AGENT = "claude"
@@ -146,7 +148,7 @@ class LocalPtyHost:
 
         try:
             listed = terminal.host_sessions()
-        except terminal.HostUnreachable as exc:
+        except pty_client.HostError as exc:
             raise HostError("The terminal host did not answer.") from exc
         found = []
         for entry in listed:
@@ -217,7 +219,7 @@ class LocalPtyHost:
 
         try:
             return await asyncio.to_thread(terminal.pty_alive_strict, pty_id)
-        except terminal.HostUnreachable as exc:
+        except pty_client.HostError as exc:
             raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
 
     async def sleeping(self, pty_id: str) -> bool:
@@ -307,7 +309,7 @@ class LocalPtyHost:
             # Runs under the resume lock, so what it checks cannot change before the spawn.
             try:
                 elsewhere = await asyncio.to_thread(self._open_elsewhere, pty_id, agent, session_id)
-            except terminal.HostUnreachable as exc:
+            except pty_client.HostError as exc:
                 raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
             if elsewhere:
                 raise HostError(OPEN_ELSEWHERE_MESSAGE)
@@ -341,7 +343,7 @@ class LocalPtyHost:
     @staticmethod
     def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> bool:
         """True when a terminal other than this lane's holds the session: the user resumed it in
-        the Code tab. Two processes must never share one stored session. Raises HostUnreachable
+        the Code tab. Two processes must never share one stored session. Raises pty_client.HostError
         when the terminal host cannot be asked."""
         import generic_agent
         from routes import terminal

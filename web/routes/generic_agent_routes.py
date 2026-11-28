@@ -83,11 +83,12 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     ends on `@gator stop`, process exit or the remote idle limit, never because
     a Code tab was closed.
     """
-    from routes.terminal import HostUnreachable, close_pty_session, session_owner
+    import pty_client
+    from routes.terminal import close_pty_session, session_owner
 
     try:
         owner = await asyncio.to_thread(session_owner, req.pty_session_id, True)
-    except HostUnreachable:
+    except pty_client.HostError:
         raise HTTPException(
             status_code=503,
             detail="Could not check whether this terminal is a remote-control session, so it was left open. Try again.",
