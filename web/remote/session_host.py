@@ -49,6 +49,19 @@ RESUME_PROMPT_MESSAGE = (
 )
 
 
+async def _finish_even_if_cancelled(coro) -> None:
+    """The paste and the Enter that follows are one step: a cancel between them would leave the text half typed
+    in the session's input."""
+    task = asyncio.ensure_future(coro)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
 class HostError(Exception):
     """The host could not do what was asked; the message is for the user. `permanent` means
     trying again cannot help (the saved session or its project is gone)."""
@@ -75,6 +88,10 @@ def read_prompt(pty_id: str, redact=None) -> Prompt | None:
     redact = redact or agent_handoff.Redactor(agent_handoff._configured_api_keys())
     parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
     return parsed or prompts.unreadable(found["at"])
+
+
+class Declined(HostError):
+    """The caller's `proceed` said no just before the text would have been typed."""
 
 
 class OpenElsewhere(HostError):
@@ -124,7 +141,7 @@ class RestoredSession:
 class SessionHost(Protocol):
     async def spawn(self, project: Project, labels: dict[str, str] | None = None) -> HostSession: ...
     async def restore(self, channel: str) -> list[RestoredSession]: ...
-    async def deliver(self, pty_id: str, text: str) -> None: ...
+    async def deliver(self, pty_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None: ...
     async def alive(self, pty_id: str) -> bool: ...
     async def sleeping(self, pty_id: str) -> bool: ...
     async def saved(self, project: Project, vendor_session_id: str | None) -> bool: ...
@@ -211,9 +228,10 @@ class LocalPtyHost:
             )
         return found
 
-    async def deliver(self, pty_id: str, text: str) -> None:
+    async def deliver(self, pty_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None:
         """Types one message into a running session. The session's wake/suspend slot is held for
-        the delivery, so the idle sweep cannot suspend it in the middle of the paste."""
+        the delivery, so the idle sweep cannot suspend it in the middle of the paste. `proceed` is asked at the
+        moment of typing, after the wait for the session to take input, and a no types nothing."""
         import agent_wake
         from routes import terminal
 
@@ -226,7 +244,9 @@ class LocalPtyHost:
             # The wait can be long: someone may have opened the terminal meanwhile.
             await asyncio.sleep(TYPE_SETTLE_SECONDS)
             await asyncio.to_thread(self._refuse_if_in_use, pty_id)
-            await agent_wake._type_message(pty_id, agent_wake.clean(text))
+            if proceed is not None and not proceed():
+                raise Declined("Remote control turned off before the message was typed.")
+            await _finish_even_if_cancelled(agent_wake._type_message(pty_id, agent_wake.clean(text)))
         except agent_wake.WakeRefused as exc:
             raise HostError(exc.reason) from exc
         finally:

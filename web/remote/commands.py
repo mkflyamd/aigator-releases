@@ -279,8 +279,11 @@ def online() -> str:
     return system_reply("Online.", ["`@gator hi` to open a chat."])
 
 
-def restarted(running: int, asleep: int) -> str:
-    return system_reply(f"Gator restarted: {running} running, {asleep} asleep.", ["`list` to see them."])
+def restarted(running: int, asleep: int, lost: int = 0) -> str:
+    text = f"Gator restarted: {running} running, {asleep} asleep."
+    if lost:
+        text += f" {lost} queued message{' was' if lost == 1 else 's were'} not sent."
+    return system_reply(text, ["`list` to see them."])
 
 
 def reconnected(channel: str, seconds: float, reason: str) -> str:
@@ -636,6 +639,15 @@ def wake_queue_full(session: str, *, project: str | None = None, several: bool =
         [f"`status {session}` to check on it."],
         project=project,
         several=several,
+    )
+
+
+def messages_not_sent(count: int) -> str:
+    """Remote control turned off while messages were waiting to be typed."""
+    noun = "message" if count == 1 else "messages"
+    return system_reply(
+        f"{count} queued {noun} not sent, because Remote control turned off.",
+        [f"Send {'it' if count == 1 else 'them'} again once it is back on."],
     )
 
 

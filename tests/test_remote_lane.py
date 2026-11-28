@@ -338,7 +338,7 @@ async def test_a_send_that_fails_for_another_reason_says_so_with_the_session_pre
     await w.feed(w.msg(100, "old note"))
     await w.feed(w.msg(101, "@gator first task"))
 
-    async def refuse(pty_id, text):
+    async def refuse(pty_id, text, proceed=None):
         raise HostError("Someone is using that session in AI Gator right now.")
 
     w.host.deliver = refuse

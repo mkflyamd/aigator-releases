@@ -6,7 +6,7 @@ from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import PROMPT_GRACE_SECONDS, RemoteService
-from remote.session_host import OPEN_ELSEWHERE_MESSAGE, HostError, HostSession, OpenElsewhere, Project, StalePrompt
+from remote.session_host import OPEN_ELSEWHERE_MESSAGE, Declined, HostError, HostSession, OpenElsewhere, Project, StalePrompt
 from remote.state import State
 
 
@@ -53,7 +53,9 @@ class FakeHost:
             raise HostError("The terminal host did not answer.")
         return list(self.restorable)
 
-    async def deliver(self, pty_id, text):
+    async def deliver(self, pty_id, text, proceed=None):
+        if proceed is not None and not proceed():
+            raise Declined("Remote control turned off before the message was typed.")
         if self.exit_on_deliver:
             raise ProcessExit()
         if self.crash_on_deliver:

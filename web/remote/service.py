@@ -19,7 +19,7 @@ from typing import Awaitable, Callable
 
 from remote import commands, prompts
 from remote.guard import limit
-from remote.session_host import HostError, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
+from remote.session_host import Declined, HostError, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -388,24 +388,27 @@ class RemoteService:
         self._persist(session)
         return session
 
-    async def send(self, session_id: str, text: str) -> None:
+    async def send(self, session_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None:
         """Types `text` into a running session. A failure is looked at again: the idle sweep may
-        have suspended the process in the meantime, and then the message needs a wake, not an error."""
+        have suspended the process in the meantime, and then the message needs a wake, not an error.
+        `proceed` is asked at the moment of typing: a no raises Aborted and nothing is typed."""
         session = self.get(session_id)
         try:
-            await self._deliver(session, text)
-        except Refusal:
+            await self._deliver(session, text, proceed)
+        except (Refusal, Aborted):
             raise
         except RemoteError:
             if await self.needs_wake(session):
                 raise Asleep(f"{session.short} is asleep.") from None
             raise
 
-    async def _deliver(self, session: Session, text: str) -> None:
+    async def _deliver(self, session: Session, text: str, proceed: Callable[[], bool] | None = None) -> None:
         if session.kind != STARTED:
             raise Refusal("Messages to another agent go through its name, not through Remote control.")
         try:
-            await self._host.deliver(session.pty_id, text)
+            await self._host.deliver(session.pty_id, text, proceed=proceed)
+        except Declined as exc:
+            raise Aborted(session.short) from exc
         except HostError as exc:
             raise RemoteError(str(exc), exc.permanent) from exc
         session.last_activity = session.awaiting_since = self._clock()
@@ -555,7 +558,7 @@ class RemoteService:
             if cancelled() or not proceed():
                 raise Aborted(session.short)
             session.wake_delivering = True
-            await self._deliver(session, text)
+            await self._deliver(session, text, proceed)
         finally:
             session.waking = session.wake_delivering = False
 

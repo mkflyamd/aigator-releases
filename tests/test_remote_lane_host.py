@@ -131,6 +131,47 @@ async def test_a_message_is_typed_once_local_keystrokes_are_old_enough(calls):
     assert calls.typed == [("pty-1", "hello")]
 
 
+async def test_a_message_is_not_typed_when_proceed_says_no_after_the_wait(calls):
+    with pytest.raises(session_host.Declined):
+        await LocalPtyHost().deliver("pty-1", "hello", proceed=lambda: False)
+    assert calls.typed == []
+    assert agent_wake.claim("vendor-1")
+
+
+async def test_proceed_is_asked_after_the_wait_for_the_session_not_before(calls, monkeypatch):
+    state = {"on": True}
+
+    async def turned_off_while_waiting(pty_id, timeout):
+        state["on"] = False
+
+    monkeypatch.setattr(agent_wake, "_wait_ready", turned_off_while_waiting)
+    with pytest.raises(session_host.Declined):
+        await LocalPtyHost().deliver("pty-1", "hello", proceed=lambda: state["on"])
+    assert calls.typed == []
+
+
+async def test_a_cancel_between_the_paste_and_the_enter_waits_for_the_enter(calls, monkeypatch):
+    import asyncio
+
+    steps = []
+    pasted = asyncio.Event()
+
+    async def paste_then_enter(pty_id, text):
+        steps.append("paste")
+        pasted.set()
+        await asyncio.sleep(0.05)
+        steps.append("enter")
+
+    monkeypatch.setattr(agent_wake, "_type_message", paste_then_enter)
+    task = asyncio.create_task(LocalPtyHost().deliver("pty-1", "hello"))
+    await pasted.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert steps == ["paste", "enter"]
+    assert agent_wake.claim("vendor-1")
+
+
 async def test_a_message_waits_its_turn_when_the_session_is_being_woken_or_suspended(calls):
     assert agent_wake.claim("vendor-1")
     with pytest.raises(HostError, match="woken or suspended"):

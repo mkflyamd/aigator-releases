@@ -34,6 +34,7 @@ class Guard:
         self._rate_limit = rate_limit
         self._rate_window = rate_window
         self._armed = False
+        self.epoch = 0
         self._events: deque[float] = deque()
         self._slow_notice_at: float | None = None
         self._dropped = 0
@@ -44,6 +45,10 @@ class Guard:
         self._armed = True
 
     def disarm(self) -> None:
+        """`epoch` counts the times Remote control was turned off: work begun in an earlier epoch is not carried
+        out in a later one, even when it is armed again by then."""
+        if self._armed:
+            self.epoch += 1
         self._armed = False
 
     @property

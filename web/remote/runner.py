@@ -118,6 +118,9 @@ class RemoteRunner:
         self._unrecorded: set[tuple[str, str]] = set()
         self._wakes: set[asyncio.Task] = set()
         self._outbox: dict[str, list[str]] = {}
+        self._drains: dict[str, asyncio.Task] = {}
+        self._seen_epoch = guard.epoch
+        self._abandoned = 0
         self._parts_lock = asyncio.Lock()
         self._restart_said = False
         self._not_armed_noticed: object = None
@@ -142,6 +145,44 @@ class RemoteRunner:
         else:
             self._guard.disarm()
             self._service.abort_wakes()
+        if self._guard.epoch != self._seen_epoch:
+            self._seen_epoch = self._guard.epoch
+            self._abandon_unsent()
+
+    def _proceed(self):
+        """True while Remote control stays on, and has not been turned off and on again, since this was made."""
+        epoch = self._guard.epoch
+        return lambda: self._guard.armed and self._guard.epoch == epoch
+
+    def _take_unsent(self, *, wake_texts: bool) -> int:
+        """Empties every queue of messages that were not typed yet and returns how many there were. A session that
+        is being stopped is not counted: the stop says what happened to it."""
+        sessions = {s.id: s for s in self._service.list()}
+        count = 0
+        for session_id, box in self._outbox.items():
+            session = sessions.get(session_id)
+            if session is not None and not session.stopping:
+                count += len(box)
+            box.clear()
+        for session in sessions.values():
+            if session.waking and not session.stopping:
+                count += len(session.queued) + (1 if wake_texts and not session.wake_delivering else 0)
+            session.queued.clear()
+        return count
+
+    def _abandon_unsent(self) -> None:
+        """Remote control was turned off: nothing that is waiting to be typed is typed later. The count is said by
+        the next tick."""
+        self._abandoned += self._take_unsent(wake_texts=False)
+        for task in self._drains.values():
+            task.cancel()
+        self._drains.clear()
+        self._outbox.clear()
+
+    async def _say_abandoned(self) -> None:
+        count, self._abandoned = self._abandoned, 0
+        if count and self._enabled:
+            await self._post(commands.messages_not_sent(count))
 
     @property
     def live(self) -> bool:
@@ -155,9 +196,12 @@ class RemoteRunner:
     async def restore(self) -> None:
         await self._service.restore()
         states = [s.state for s in self._service.list()]
-        if self.live and (LIVE in states or SLEEPING in states):
+        lost = self._state.channel_value(self._channel.name, "lost_at_shutdown") or 0
+        if lost:
+            self._state.set_channel_value(self._channel.name, "lost_at_shutdown", None)
+        if self.live and (LIVE in states or SLEEPING in states or lost):
             self._restart_said = True
-            await self._post(commands.restarted(states.count(LIVE), states.count(SLEEPING)))
+            await self._post(commands.restarted(states.count(LIVE), states.count(SLEEPING), lost))
 
     def connection_failed(self, exc: Exception) -> None:
         """Remembers why the chat cannot be reached, for the Remote control pill and for the line said once it is back."""
@@ -178,6 +222,9 @@ class RemoteRunner:
     async def shutdown(self) -> None:
         """Ends the background wakes before the backend goes down."""
         self._service.abort_wakes()
+        lost = self._take_unsent(wake_texts=True)
+        if lost:
+            self._state.set_channel_value(self._channel.name, "lost_at_shutdown", lost)
         tasks = list(self._wakes)
         for task in tasks:
             task.cancel()
@@ -658,19 +705,29 @@ class RemoteRunner:
         box = self._outbox.setdefault(session.id, [])
         box.append(text)
         if len(box) == 1:
-            task = asyncio.create_task(self._drain(session, box))
+            task = asyncio.create_task(self._drain(session, box, self._proceed()))
+            self._drains[session.id] = task
             self._wakes.add(task)
             task.add_done_callback(self._wakes.discard)
 
-    async def _drain(self, session: Session, box: list[str]) -> None:
+    async def _drain(self, session: Session, box: list[str], proceed: Callable[[], bool]) -> None:
         try:
             while box:
                 text = box[0]
-                if session.stopping or not self._guard.armed:
+                if session.stopping:
+                    box.clear()
+                    return
+                if not proceed():
+                    self._abandoned += len(box)
                     box.clear()
                     return
                 try:
-                    await self._service.send(session.id, text)
+                    await self._service.send(session.id, text, proceed)
+                except Aborted:
+                    if not session.stopping:
+                        self._abandoned += len(box)
+                    box.clear()
+                    return
                 except Asleep:
                     try:
                         await self._start_wake(session, text)
@@ -694,6 +751,8 @@ class RemoteRunner:
         finally:
             if self._outbox.get(session.id) is box:
                 del self._outbox[session.id]
+            if self._drains.get(session.id) is asyncio.current_task():
+                del self._drains[session.id]
 
     async def _answer(
         self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False
@@ -909,15 +968,17 @@ class RemoteRunner:
             return
         self._service.begin_wake(session)
         await self._post(self._lane_copy(commands.waking, session))
-        task = asyncio.create_task(self._wake(session, text))
+        task = asyncio.create_task(self._wake(session, text, self._proceed()))
         self._service.attach_wake(session, task)
         self._wakes.add(task)
         task.add_done_callback(self._wakes.discard)
 
-    async def _wake(self, session: Session, text: str) -> None:
+    async def _wake(self, session: Session, text: str, proceed: Callable[[], bool]) -> None:
         try:
-            await self._service.wake(session, text, proceed=lambda: self._guard.armed)
+            await self._service.wake(session, text, proceed=proceed)
         except Aborted:
+            if not session.stopping:
+                self._abandoned += 1 + len(session.queued)
             session.queued.clear()
             return
         except Elsewhere:
@@ -1077,6 +1138,7 @@ class RemoteRunner:
             await self._post(commands.slow_down(self._guard.wait_seconds(), count))
         if self._master.active():
             self._not_armed_noticed = None
+        await self._say_abandoned()
         if self._master.expired():
             await self._expire()
         elif self.live:

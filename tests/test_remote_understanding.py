@@ -257,9 +257,9 @@ def _gate_deliveries(w):
     gate = asyncio.Event()
     real = w.host.deliver
 
-    async def deliver(pty_id, text):
+    async def deliver(pty_id, text, proceed=None):
         await gate.wait()
-        await real(pty_id, text)
+        await real(pty_id, text, proceed)
 
     w.host.deliver = deliver
     return gate
@@ -298,7 +298,7 @@ async def test_a_queued_message_that_cannot_be_typed_says_so(w):
     await opened(w)
     await say(w, "run the tests")
 
-    async def refuse(pty_id, text):
+    async def refuse(pty_id, text, proceed=None):
         raise HostError("Someone is using that session in AI Gator right now.")
 
     w.host.deliver = refuse

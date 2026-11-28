@@ -396,10 +396,10 @@ def refuse_typing_while_asking(w):
     """What the terminal does: a message typed at a permission dialog is refused, not sent."""
     original = w.host.deliver
 
-    async def deliver(pty_id, text):
+    async def deliver(pty_id, text, proceed=None):
         if w.host.states.get(pty_id, {}).get("state") == "asking":
             raise HostError("The agent is waiting for the user to answer a permission prompt.")
-        await original(pty_id, text)
+        await original(pty_id, text, proceed)
 
     w.host.deliver = deliver
 

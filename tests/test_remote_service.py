@@ -39,7 +39,7 @@ class FakeHost:
             raise HostError("The terminal host did not answer.")
         return list(self.restorable)
 
-    async def deliver(self, pty_id, text):
+    async def deliver(self, pty_id, text, proceed=None):
         if self.fail_deliver:
             raise HostError(self.fail_deliver)
         self.delivered.append((pty_id, text))
@@ -185,7 +185,7 @@ async def test_completed_event_when_idle_follows_a_send(svc, host, clock):
 
 
 async def test_idle_written_while_the_prompt_is_still_being_typed_is_not_a_finished_turn(svc, host, clock):
-    async def slow_deliver(pty_id, text):
+    async def slow_deliver(pty_id, text, proceed=None):
         clock.now += 6
         host.states[pty_id] = {"state": "idle", "at": clock.now}
         clock.now += 2
