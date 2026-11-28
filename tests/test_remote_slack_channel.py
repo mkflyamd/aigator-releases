@@ -4,7 +4,7 @@ import time
 import pytest
 
 from remote import commands, slack_channel
-from remote.channel import ChannelRefused, InboundMessage
+from remote.channel import ChannelRefused, InboundMessage, PostUncertain
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
@@ -66,6 +66,18 @@ def test_post_to_the_own_self_dm_sends_and_records_the_ts(tmp_path, slack):
     assert ts == "1700000000.000001"
     assert slack.posts() == [("chat.postMessage", {"channel": SELF_DM, "text": "[\U0001F40A Gator] Online"}, "POST")]
     assert state.is_own_post("slack", "1700000000.000001")
+
+
+@pytest.mark.parametrize(
+    "error, uncertain",
+    [("ratelimited", False), ("not_authed", False), ("The read operation timed out", True), ("<urlopen error x>", True)],
+)
+def test_only_a_post_slack_never_answered_may_be_in_the_chat(tmp_path, slack, error, uncertain):
+    slack.fail_post = error
+    channel = SlackSelfDM(state=State(tmp_path / "s.json"))
+    with pytest.raises(ChannelRefused) as caught:
+        channel.post("[🐊 Gator] hello")
+    assert isinstance(caught.value, PostUncertain) is uncertain
 
 
 def test_post_to_any_other_dm_is_refused_and_logged(tmp_path, slack, caplog):

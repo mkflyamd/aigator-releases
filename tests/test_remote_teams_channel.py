@@ -1,7 +1,8 @@
 import pytest
+from fastapi import HTTPException
 
 from remote import teams_channel
-from remote.channel import ChannelRefused
+from remote.channel import ChannelRefused, PostUncertain
 from remote.state import State
 from remote.teams_channel import TeamsSelfChat
 
@@ -80,6 +81,25 @@ def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch, a
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused, match="token expired"):
         chat.post("[\U0001F40A Gator] hi")
+
+
+@pytest.mark.parametrize(
+    "error, uncertain",
+    [
+        (HTTPException(status_code=429, detail="Skype API: too many requests"), False),
+        (HTTPException(status_code=500, detail="The read operation timed out"), True),
+        (TimeoutError("timed out"), True),
+    ],
+)
+def test_only_a_send_the_server_never_answered_may_be_in_the_chat(tmp_path, monkeypatch, autosend_gate, error, uncertain):
+    def fail(chat_id, html):
+        raise error
+
+    monkeypatch.setattr(teams_channel, "send_message", fail)
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    with pytest.raises(ChannelRefused) as caught:
+        chat.post("[🐊 Gator] hi")
+    assert isinstance(caught.value, PostUncertain) is uncertain
 
 
 def test_poll_returns_inbound_messages_newest_first(monkeypatch):

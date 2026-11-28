@@ -65,6 +65,26 @@ async def test_answers_are_never_held_back_by_the_rate_limit(w):
     assert not any("Not sent" in p for p in w.channel.posted)
 
 
+async def test_a_message_to_another_session_is_held_back_even_when_a_prompt_elsewhere_would_take_it(w):
+    from tests.test_remote_prompts import ASK_USER_QUESTION
+    from tests.test_remote_runner import OTHER
+
+    await opened(w)
+    await say(w, "run the tests")
+    await w.service.start(OTHER, "other task")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    for _ in range(25):
+        w.guard.allow_command()
+    w.channel.posted.clear()
+    await say(w, "@other 1")
+    assert w.host.typed == []
+    assert w.channel.posted[0].startswith("[🐊 Gator] Not sent:")
+    w.channel.posted.clear()
+    await say(w, "@budget 1")
+    assert w.host.typed == [("pty-1", (prompts.ENTER,))]
+    assert not any("Not sent" in p for p in w.channel.posted)
+
+
 async def test_a_new_request_over_the_limit_says_it_was_not_sent(w):
     await opened(w)
     for _ in range(25):

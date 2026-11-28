@@ -6,6 +6,7 @@ import asyncio
 import pytest
 
 from remote import commands, runner
+from remote.channel import PostUncertain
 from tests.test_remote_chat_window import opened, say
 from tests.test_remote_runner import World, _finish
 
@@ -101,6 +102,51 @@ async def test_two_long_replies_never_interleave(w):
     await w.runner._post_all(second)
     await settle(w)
     assert [m.split("\n")[0] for m in w.channel.posted] == ["[x] (1/2)", "[x] (2/2)", "[y] (1/2)", "[y] (2/2)"]
+
+
+async def test_no_other_post_lands_between_the_parts_of_a_reply(w):
+    await opened(w)
+    await say(w, "go")
+    w.channel.posted.clear()
+    release = asyncio.Event()
+    real = w.channel.post
+    loop = asyncio.get_running_loop()
+
+    def gated(text, reply_to=None):
+        if "(2/2)" in text.splitlines()[0]:
+            asyncio.run_coroutine_threadsafe(release.wait(), loop).result(5)
+        return real(text, reply_to)
+
+    w.channel.post = gated
+    await w.runner._post_all(["[x] (1/2)\none", "[x] (2/2)\ntwo"])
+    note = asyncio.create_task(w.runner._post("[note]"))
+    await asyncio.sleep(0.05)
+    release.set()
+    await settle(w)
+    await note
+    assert [m.split("\n")[0] for m in w.channel.posted] == ["[x] (1/2)", "[x] (2/2)", "[note]"]
+
+
+async def test_a_part_whose_post_got_no_answer_is_not_sent_again(w):
+    await opened(w)
+    await say(w, "go")
+    w.channel.posted.clear()
+    real, calls = w.channel.post, []
+
+    def silent(text, reply_to=None):
+        calls.append(text)
+        if "(2/3)" in text.splitlines()[0]:
+            raise PostUncertain("timed out")
+        return real(text, reply_to)
+
+    w.channel.post = silent
+    await _finish(w, LONG)
+    await settle(w)
+    assert sum("(2/3)" in c.splitlines()[0] for c in calls) == 1
+    posted = w.channel.posted
+    assert len(posted) == 3
+    assert posted[1] == commands.part_unsure(2, 3)
+    assert posted[2].splitlines()[0].endswith("(3/3)")
 
 
 def test_the_pause_between_parts_is_a_real_second_outside_tests():

@@ -343,6 +343,7 @@ async def test_a_send_that_fails_for_another_reason_says_so_with_the_session_pre
 
     w.host.deliver = refuse
     await w.feed(w.msg(102, "@gator second task"))
+    await asyncio.gather(*list(w.runner._wakes), return_exceptions=True)
     assert w.channel.posted[-1] == commands.send_failed(
         "budget", "Someone is using that session in AI Gator right now.", project="Budget"
     )

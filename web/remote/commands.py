@@ -265,6 +265,13 @@ def part_not_sent(number: int, total: int) -> str:
     )
 
 
+def part_unsure(number: int, total: int) -> str:
+    return system_reply(
+        f"Part {number} of {total} may not have arrived: the chat did not answer.",
+        ["Check the chat before asking for the reply again."],
+    )
+
+
 def stale_skipped(count: int, limit_seconds: float) -> str:
     one = count == 1
     what = "a message" if one else f"{count} messages"

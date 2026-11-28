@@ -12,6 +12,10 @@ class ChannelRefused(Exception):
     """The adapter would not post. The message is for the log, never sent to the channel."""
 
 
+class PostUncertain(ChannelRefused):
+    """The post got no answer, so the chat may have received it. A caller never sends the same text again."""
+
+
 class AutosendOff(ChannelRefused):
     """The auto-send switch is off, in the user's settings or by the administrator's policy."""
 

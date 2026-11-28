@@ -6,13 +6,16 @@ is the message time."""
 from __future__ import annotations
 
 import logging
+import re
 import time
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
+from remote.channel import ChannelRefused, InboundMessage, PostUncertain, require_autosend, slack_mrkdwn
 from remote.commands import is_own_message
 from remote.state import UNROUTED_PREFIX, State
 
 _log = logging.getLogger(__name__)
+
+_ERROR_CODE = re.compile(r"[a-z0-9_]+")  # a Slack error code: Slack answered. Anything else is a network failure
 
 HISTORY_LIMIT = 10
 RECENT_SECONDS = 15 * 60.0
@@ -172,7 +175,10 @@ class SlackSelfDM:
         require_autosend()
         sent = _api("chat.postMessage", {"channel": self._channel_id, "text": slack_mrkdwn(text)}, method="POST")
         if not sent.get("ok"):
-            raise ChannelRefused(f"Slack error: {sent.get('error', 'unknown')}")
+            error = str(sent.get("error") or "unknown")
+            if _ERROR_CODE.fullmatch(error):
+                raise ChannelRefused(f"Slack error: {error}")
+            raise PostUncertain(f"Slack error: {error}")
         message_id = str(sent.get("ts") or "")
         if message_id:
             self._state.record_post(self.name, message_id)

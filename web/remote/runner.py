@@ -15,7 +15,7 @@ from typing import Callable
 
 from remote import commands, needs_you, prompts
 from remote.bystanders import TerminalWatch
-from remote.channel import AutosendOff, Channel, InboundMessage
+from remote.channel import AutosendOff, Channel, InboundMessage, PostUncertain
 from remote import master as master_window
 from remote.guard import Guard, limit
 from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
@@ -255,25 +255,42 @@ class RemoteRunner:
         task.add_done_callback(self._wakes.discard)
 
     async def _send_parts(self, parts: list[str]) -> None:
-        """Each part is tried twice. A part that still does not go is said so, and the rest follow."""
+        """Each part is tried twice, but only after a failure the channel was told of: a part whose post got no
+        answer may be in the chat already, so it is said so and never sent again. A part that does not go is said
+        so, and the rest follow."""
         async with self._parts_lock:
             for number, part in enumerate(parts, 1):
                 if number > 1:
                     await asyncio.sleep(PART_PAUSE_SECONDS)
-                if await self._try_post(part) is not None:
-                    continue
-                await asyncio.sleep(PART_PAUSE_SECONDS)
-                if await self._try_post(part) is None:
-                    await self._post(commands.part_not_sent(number, len(parts)))
+                try:
+                    if await self._post_now(part) is not None:
+                        continue
+                    await asyncio.sleep(PART_PAUSE_SECONDS)
+                    if await self._post_now(part) is not None:
+                        continue
+                    notice = commands.part_not_sent(number, len(parts))
+                except PostUncertain:
+                    notice = commands.part_unsure(number, len(parts))
+                await self._post_now(notice, quiet=True)
 
     async def _try_post(self, text: str) -> str | None:
-        """The id of the posted message ("" when the channel posted but gave no id), or None when it did not post."""
+        """The id of the posted message ("" when the channel posted but gave no id), or None when it did not post.
+        Waits for a reply in parts to finish, so nothing lands between its parts."""
+        async with self._parts_lock:
+            return await self._post_now(text, quiet=True)
+
+    async def _post_now(self, text: str, quiet: bool = False) -> str | None:
+        """One post. Raises PostUncertain when the chat may have received it, unless `quiet`."""
         try:
             return await asyncio.to_thread(self._channel.post, text) or ""
         except AutosendOff:
             if not self._autosend_noticed:
                 self._autosend_noticed = True
                 _log.info("Remote control is not replying on %s: auto-send is off", self._channel.name)
+        except PostUncertain as exc:
+            _log.warning("Remote control got no answer posting a reply: %s", exc)
+            if not quiet:
+                raise
         except Exception as exc:
             _log.warning("Remote control could not post a reply: %s", exc)
         return None
@@ -443,8 +460,27 @@ class RemoteRunner:
             return True
         if command.kind != "send":
             return False
-        shown = [s.prompt for s in [*self._service.list(), *self._watched_waiting()] if s.prompt is not None]
-        return any(isinstance(prompts.resolve(p, command.text), prompts.Answer) for p in shown)
+        target = self._reply_target(command.text)
+        return target is not None and isinstance(prompts.resolve(*target), prompts.Answer)
+
+    def _reply_target(self, text: str) -> tuple[prompts.Prompt, str] | None:
+        """The prompt `_send` would answer with `text`, and the reply it would type: only the session the
+        message goes to, never another session's prompt."""
+        mention = commands.LEADING_MENTION_RE.match(text)
+        if mention:
+            name, rest = mention.group(1), (mention.group(2) or "").strip()
+            session = self._service.resolve(name)
+            if session is not None:
+                return (session.prompt, rest) if session.waiting and session.prompt is not None and rest else None
+            if name.lower() not in _TAGS:
+                return None
+            text = rest
+        first, _, rest = text.partition(" ")
+        named = self._service.resolve(first.rstrip(":"))
+        if named is not None and rest.strip():
+            return (named.prompt, rest.strip()) if named.waiting and named.prompt is not None else None
+        waiting = [s for s in [*self._service.list(), *self._watched_waiting()] if s.waiting and s.prompt is not None]
+        return (waiting[0].prompt, text) if len(waiting) == 1 else None
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
