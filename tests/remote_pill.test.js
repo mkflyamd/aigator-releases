@@ -196,8 +196,18 @@ function makeEnv(doc, script) {
         last = queue.length > 1 ? queue.shift() : last;
         return { ok: true, status: 200, json: async () => last };
       }
-      if (env.refuse && url === '/api/remote/arm') {
+      if (env.refuse && (url === '/api/remote/arm' || url === '/api/remote/restart')) {
         return { ok: false, status: 409, json: async () => ({ detail: env.refuse }) };
+      }
+      if (url === '/api/remote/restart') {
+        last = {
+          ...last,
+          state: 'on',
+          reason: null,
+          armed_at: last.now,
+          expires_at: last.now + 43200,
+        };
+        return { ok: true, status: 200, json: async () => last };
       }
       if (url === '/api/remote/arm') {
         last = {
@@ -457,7 +467,10 @@ test('turning on opens the sheet once, then arms with the CSRF header; restart i
   await click(doc, 'restart');
   await settle();
   const writes = env.calls.filter((c) => c[0] === 'POST').map((c) => c[1]);
-  assert.deepStrictEqual(writes, ['/api/remote/disarm', '/api/remote/arm']);
+  assert.deepStrictEqual(writes, ['/api/remote/restart']);
+  const restart = env.calls.find((c) => c[1] === '/api/remote/restart');
+  assert.strictEqual(restart[2], 'aigator-fake-api-key');
+  assert.strictEqual(rp.status.state, 'on');
 });
 
 test('the update toast is lifted above the footer card only while the card is on screen', async () => {
@@ -479,7 +492,7 @@ test('the update toast is lifted above the footer card only while the card is on
   assert.strictEqual(props['--rcp-toast-lift'], '0px');
 });
 
-test('a refused restart says Remote control is off and shows the reason', async () => {
+test('a refused restart leaves the window running and shows the reason', async () => {
   const doc = makeDocument();
   rebuildShell(doc, loadTemplate());
   const env = makeEnv(doc, running(41945));
@@ -489,9 +502,10 @@ test('a refused restart says Remote control is off and shows the reason', async 
   env.refuse = 'Replies to your own chat are off. Turn them on in Settings first.';
   await click(doc, 'restart');
   await settle();
-  assert.strictEqual(rp.status.state, 'off');
+  assert.notStrictEqual(rp.status.state, 'off');
+  assert(!env.calls.some((c) => c[1] === '/api/remote/disarm'));
   const err = doc.getElementById('remote-pill-slot').querySelector('[data-rcp-err]');
-  assert.strictEqual(err.textContent, 'Could not restart, so Remote control is off. ' + env.refuse);
+  assert.strictEqual(err.textContent, env.refuse);
 });
 
 test('the sheet makes no promise the server does not keep', () => {

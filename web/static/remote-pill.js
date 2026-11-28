@@ -537,14 +537,10 @@
         return startOn();
       }
       if (what === 'restart') {
-        return act(async () => {
-          await disarm();
-          try {
-            return await arm();
-          } catch (error) {
-            throw new Error('Could not restart, so Remote control is off. ' + error.message);
-          }
-        }, 'Remote control restarted. On for 12 hours.');
+        return act(
+          () => call('POST', '/api/remote/restart'),
+          'Remote control restarted. On for 12 hours.',
+        );
       }
       if (what === 'replies') {
         return act(async () => {
