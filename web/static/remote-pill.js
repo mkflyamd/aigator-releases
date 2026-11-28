@@ -143,7 +143,7 @@
         view.noteWarn = true;
         view.acts = [{ act: 'restart', label: 'Restart 12 hours' }];
       } else if (quarter) {
-        view.note = 'Sessions stop when it turns off. Restart to keep them going.';
+        view.note = 'Sessions stop when the 12 hours end. Restart to keep them going.';
         view.noteWarn = true;
         view.acts = [{ act: 'restart', label: 'Restart 12 hours', primary: true }];
       }
@@ -435,9 +435,10 @@
       }
       if (key === lastAnnounce) return;
       lastAnnounce = key;
-      if (key === 'warn_1h') say('Remote control turns off in 1 hour. Sessions stop when it does.');
+      if (key === 'warn_1h')
+        say('Remote control turns off in 1 hour. Sessions stop when the time is up.');
       else if (key === 'warn_15m')
-        say('Remote control turns off in 15 minutes. Sessions stop when it does.');
+        say('Remote control turns off in 15 minutes. Sessions stop when the time is up.');
       else if (key === 'expired' || key === 'expiring')
         say('Remote control turned off after 12 hours.');
       else if (key === 'stopped_from_chat') say('Remote control turned off from your chat.');

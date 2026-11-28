@@ -318,7 +318,7 @@ test('every server state maps to the card the design shows', () => {
   const quarter = vmOf('warn_15m', {}, 14 * 60);
   assert.strictEqual(quarter.timer.text, 'Turns off in 14 min');
   assert.strictEqual(quarter.timer.spoken, 'Turns off in 14 minutes');
-  assert(/Sessions stop when it turns off/.test(quarter.note));
+  assert(/Sessions stop when the 12 hours end/.test(quarter.note));
   assert.strictEqual(quarter.acts[0].primary, true, 'primary at 15 minutes');
   assert(/class="rcp-btn is-primary" data-rcp="restart"/.test(pill.cardHtml(quarter)));
 });
