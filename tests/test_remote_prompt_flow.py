@@ -104,11 +104,31 @@ async def test_a_number_picks_that_menu_row(w):
     assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Got it: Blue."
 
 
-async def test_typed_words_answer_a_question_as_its_own_answer(w):
+async def test_an_untagged_note_is_never_typed_as_a_free_text_answer(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "green please")
+    assert w.host.typed == [] and w.host.delivered == [("pty-1", "run the tests")]
+    assert "reply to this message or start with `@gator`" in w.channel.posted[-1]
+    assert w.service.list()[0].waiting
+
+
+async def test_a_quote_reply_to_the_question_is_typed_as_its_own_answer(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    from tests.test_remote_needs_you import quote_reply
+
+    await quote_reply(w, routed(w)[0]["message_id"], "green please")
+    assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+
+
+async def test_typed_words_answer_a_question_as_its_own_answer(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    await say(w, "@gator green please")
     assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
     assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Sent your answer."
     assert not w.service.list()[0].waiting

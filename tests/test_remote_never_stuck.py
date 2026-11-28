@@ -122,7 +122,9 @@ async def test_a_typed_answer_to_a_question_is_offered_and_typed_as_its_own_answ
     await say(w, "run the tests")
     await show(w, "pty-1", ASK_USER_QUESTION)
     assert prompts.TYPE_OPTION in w.channel.posted[-1]
-    await say(w, "x" * 900)
+    await say(w, "@gator " + "x" * 900)
+    assert w.host.typed == [] and "limit is 500" in w.channel.posted[-1]
+    await say(w, "@gator " + "x" * prompts.ANSWER_MAX_CHARS)
     [(_, keys)] = w.host.typed
     assert keys[:2] == (prompts.DOWN, prompts.DOWN) and keys[-1] == prompts.ENTER
     assert len(keys[2]) == prompts.ANSWER_MAX_CHARS

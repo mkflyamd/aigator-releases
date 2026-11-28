@@ -576,9 +576,9 @@ class RemoteRunner:
             await self._answer(watched[0], text, sent_at)
             return
         if len(waiting) == 1:
-            await self._deliver(waiting[0], text, sent_at)
+            await self._deliver(waiting[0], text, sent_at, tagged)
         elif len(sessions) == 1:
-            await self._deliver(sessions[0], text, sent_at)
+            await self._deliver(sessions[0], text, sent_at, tagged)
         elif sessions:
             raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
@@ -588,7 +588,7 @@ class RemoteRunner:
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
-    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0) -> None:
+    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0, tagged: bool = True) -> None:
         if await self._service.needs_wake(session):
             if await self._route_elsewhere(session, text):
                 return
@@ -596,7 +596,7 @@ class RemoteRunner:
             return
         await self._service.refresh(session.id)
         if session.waiting and session.prompt is not None:
-            await self._answer(session, text, sent_at)
+            await self._answer(session, text, sent_at, free_text=tagged)
             return
         busy = session.awaiting_since is not None and session.kind == STARTED
         elapsed = self._clock() - self._since(session)
@@ -622,12 +622,14 @@ class RemoteRunner:
             )
         )
 
-    async def _answer(self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False) -> None:
+    async def _answer(
+        self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False
+    ) -> None:
         """A reply to a session that is showing a permission or a question: typed as that answer, or
         not typed at all, and said so. `interrupt` cancels the prompt with Escape instead."""
         short, project, prefix = session.short, session.project.name, self._prefix(session)
         try:
-            result = await self._service.answer_session(session, text, sent_at, interrupt=interrupt, free_text=True)
+            result = await self._service.answer_session(session, text, sent_at, interrupt=interrupt, free_text=free_text)
         except PromptRefused as exc:
             raise Refusal(
                 prompts.waiting_message(short, project, exc.prompt, refused=exc.reason, prefix=prefix)
@@ -646,7 +648,7 @@ class RemoteRunner:
     async def _answer_quoted(self, command: commands.Command) -> None:
         """The reply to one prompt message goes to that message's session, and only while that prompt is the
         one the session is showing. Otherwise nothing is typed and the user is told it was already answered."""
-        await self._answer(self._quoted_session(command), command.text)
+        await self._answer(self._quoted_session(command), command.text, free_text=True)
 
     async def _interrupt(self, command: commands.Command) -> None:
         """`esc`: cancels the prompt a session is showing and keeps the session. A quote-reply names its prompt;

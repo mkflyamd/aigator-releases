@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+import agent_wake
+
 from remote.commands import _tidy, agent_prefix, elapsed_words, next_block, system_reply
 
 COMMAND_MAX_CHARS = 150
@@ -204,8 +206,10 @@ def interrupt(prompt: Prompt) -> Answer:
 
 def resolve(prompt: Prompt, text: str, free_text: bool = False) -> Answer | Refused:
     """The keys that answer `prompt` with the user's reply, or why the reply is not an answer. With `free_text`,
-    a reply to a question that is not one of its choices is typed as the question's own "other" answer."""
-    reply = " ".join(text.split())
+    a reply to a question that is not one of its choices is typed as the question's own "other" answer: only for a
+    quote-reply to the question or a tagged message, never for a note that merely arrived while it waited.
+    Whatever is typed is plain text: control characters and escape sequences never reach the terminal."""
+    reply = agent_wake.clean(text)
     if prompt.kind == PERMISSION:
         word = reply.lower().rstrip(".!")
         if word == ALLOW and not prompt.cut:
@@ -225,7 +229,17 @@ def resolve(prompt: Prompt, text: str, free_text: bool = False) -> Answer | Refu
         if reply.lower() == choice.label.lower():
             return _pick(prompt, number)
     if free_text and reply:
-        return Answer((*(DOWN,) * len(prompt.choices), reply[:ANSWER_MAX_CHARS], ENTER), ANSWER_SENT)
+        if len(reply) > ANSWER_MAX_CHARS:
+            return Refused(
+                f"that answer is {len(reply)} characters and the limit is {ANSWER_MAX_CHARS}. "
+                "Shorten it and send it again, or answer it in AI Gator."
+            )
+        return Answer((*(DOWN,) * len(prompt.choices), reply, ENTER), ANSWER_SENT)
+    if reply:
+        return Refused(
+            f"pick {_digits(len(prompt.choices))}. To answer in your own words, reply to this message "
+            "or start with `@gator`."
+        )
     return Refused(f"pick {_digits(len(prompt.choices))}, or answer it in AI Gator.")
 
 

@@ -273,9 +273,24 @@ def test_a_number_out_of_range_types_nothing_and_says_what_to_pick():
 
 
 @pytest.mark.parametrize("reply", ["green, please", "hi\x1b[B\x03there", "x" * 600])
-def test_free_text_is_not_typed_into_a_question_because_its_other_row_was_not_seen_live(reply):
+def test_free_text_is_not_typed_unless_the_reply_is_a_quote_or_tagged(reply):
     out = prompts.resolve(parsed(ASK_USER_QUESTION), reply)
-    assert out == prompts.Refused("pick 1 or 2, or answer it in AI Gator.")
+    assert out == prompts.Refused(
+        "pick 1 or 2. To answer in your own words, reply to this message or start with `@gator`."
+    )
+
+
+def test_free_text_is_typed_as_plain_text_with_no_control_characters():
+    out = prompts.resolve(parsed(ASK_USER_QUESTION), "hi\x1b[B\x03there\x1b]0;x\x07 now\r\nok", free_text=True)
+    assert out.keys == (prompts.DOWN, prompts.DOWN, "hi there now ok", prompts.ENTER)
+
+
+def test_an_answer_over_the_limit_is_refused_not_cut_and_says_so():
+    at_limit = prompts.resolve(parsed(ASK_USER_QUESTION), "x" * prompts.ANSWER_MAX_CHARS, free_text=True)
+    assert isinstance(at_limit, prompts.Answer) and len(at_limit.keys[2]) == prompts.ANSWER_MAX_CHARS
+    out = prompts.resolve(parsed(ASK_USER_QUESTION), "x" * 501, free_text=True)
+    assert isinstance(out, prompts.Refused)
+    assert "501 characters" in out.reason and "limit is 500" in out.reason and "Shorten it" in out.reason
 
 
 
