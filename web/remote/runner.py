@@ -399,6 +399,14 @@ class RemoteRunner:
         now = self._clock()
         self._turns[session.id] = _Turn(started=now, last_note=now)
 
+    def _peer_ref(self, session: Session) -> str:
+        """What to type to reach a watched agent: its name when a name picks it, else its id."""
+        entry = {"session_id": session.vendor_session_id or "", "title": session.name}
+        peer = Peer(entry)
+        if peer.session_id and not addressable(peer, self._reserved()):
+            return peer.short
+        return commands.peer_label(session.name)
+
     async def _on_peer_event(self, event: Event) -> None:
         """What another agent answered to a message sent from chat, or that it closed before answering."""
         session = event.session
@@ -406,7 +414,8 @@ class RemoteRunner:
         if event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
-            await self._post(commands.peer_result(session.name, project, event.text, waiting))
+            ref = self._peer_ref(session)
+            await self._post(commands.peer_result(session.name, project, event.text, waiting, ref))
         elif event.kind == "detached" and event.text:
             await self._post(commands.peer_exited(session.name, project))
 
@@ -474,8 +483,11 @@ class RemoteRunner:
             if not self._timeout_noticed:
                 self._timeout_noticed = True
                 await self._post(commands.timed_out(self._guard.armed_max_seconds))
-            return
         if self._guard.armed:
             await self._close_if_expired()
             await self._service.tick()
             await self._report_progress()
+        else:
+            # A message already sent to another agent still gets its answer after `stop all` or the
+            # time limit; Remote's own sessions are gone by then, so only watched ones are checked.
+            await self._service.tick(ADOPTED)

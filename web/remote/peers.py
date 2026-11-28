@@ -15,6 +15,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from remote.commands import peer_label
+
 READY_SECONDS = 15.0
 CACHE_SECONDS = 15.0
 WINDOW_SECONDS = 3600.0
@@ -177,6 +179,8 @@ def resolve(peers: list[Peer], text: str, reserved: frozenset[str], colon_only: 
         names = [peer.session_id, peer.short]
         if addressable(peer, reserved):
             names.append(peer.name)
+            if peer_label(peer.name) != peer.name:
+                names.append(peer_label(peer.name))
         for name in names:
             n = len(name)
             if n < best or text[:n].casefold() != name.casefold():

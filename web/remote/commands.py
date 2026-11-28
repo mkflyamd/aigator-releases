@@ -328,9 +328,9 @@ def peer_exited(name: str, project: str) -> str:
     )
 
 
-def peer_result(name: str, project: str, text: str, waiting: bool = False) -> str:
+def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> str:
     """Another agent's answer to a message sent from chat, under its own name. `text` has already been
-    through the same redaction as Remote's own replies."""
+    through the same redaction as Remote's own replies. `ref` is what the person types to reach it."""
     return agent_result(
         "Claude",
         name,
@@ -338,7 +338,7 @@ def peer_result(name: str, project: str, text: str, waiting: bool = False) -> st
         text,
         waiting,
         prefix=peer_prefix(name, project),
-        reply_to=f"@gator {peer_label(name)} ",
+        reply_to=f"@gator {ref or peer_label(name)} ",
     )
 
 

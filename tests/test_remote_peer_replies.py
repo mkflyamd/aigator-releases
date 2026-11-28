@@ -317,3 +317,64 @@ async def test_a_second_message_starts_a_fresh_wait_for_the_answer(pw):
     await pw.say("@gator MergeBrain two")
     assert len(pw.service.watched(ADOPTED)) == 1
     assert pw.service.watched(ADOPTED)[0].awaiting_since == first + 30
+
+
+async def test_the_answer_still_comes_after_stop_all(pw):
+    await sent(pw)
+    await pw.say("@gator stop all")
+    pw.channel.posted.clear()
+    answer(pw, "idle", "Rebased onto main.")
+    await pw.runner.tick()
+    assert pw.channel.posted == [commands.peer_result("MergeBrain", "Budget", "Rebased onto main.")]
+
+
+async def test_the_answer_still_comes_after_the_time_limit(pw):
+    await sent(pw)
+    pw.service._idle = lambda: 10 * 24 * 3600
+    pw.clock.now += 24 * 3600 + 1
+    answer(pw, "idle", "Rebased onto main.", offset=1.0)
+    await pw.runner.tick()
+    assert commands.peer_result("MergeBrain", "Budget", "Rebased onto main.") in pw.channel.posted
+
+
+async def test_nothing_of_remotes_own_is_checked_while_stopped(pw):
+    await baselined(pw)
+    await pw.say("@gator stop all")
+    pw.channel.posted.clear()
+    await pw.runner.tick()
+    assert pw.channel.posted == []
+
+
+def peer_world(tmp_path, title):
+    e = entry(title)
+    w = PeerWorld(tmp_path, e)
+    w.host.alive_ids.add(e["pty_id"])
+    return w, e
+
+
+@pytest.mark.parametrize("title", ["[WIP] fix login", "Merge - Brain", "x" * 60, "two\nlines"])
+async def test_the_answer_hint_names_an_agent_that_resolves(tmp_path, title):
+    w, e = peer_world(tmp_path, title)
+    await baselined(w)
+    await w.say(f"@gator {commands.peer_label(e['title'])} hi")
+    assert w.gateway.sent, "the label a person sees must pick the agent"
+    w.channel.posted.clear()
+    w.host.states[e["pty_id"]] = {"state": "asking", "at": w.clock.now + 1}
+    w.host.last[e["pty_id"]] = "Which one?\n1. yes\n2. no"
+    await w.runner.tick()
+    reply = w.channel.posted[0]
+    hint = reply.split("`@gator ")[1].split(" yes`")[0]
+    w.gateway.sent.clear()
+    await w.say(f"@gator {hint} yes")
+    assert [t for _, t, _ in w.gateway.sent] == ["yes"]
+
+
+async def test_the_hint_uses_the_id_when_the_name_starts_with_a_command_word(tmp_path):
+    w, e = peer_world(tmp_path, "stop the line")
+    await baselined(w)
+    await w.say(f"@gator {e['session_id'][:8]} hi")
+    w.channel.posted.clear()
+    w.host.states[e["pty_id"]] = {"state": "asking", "at": w.clock.now + 1}
+    w.host.last[e["pty_id"]] = "Which one?\n1. yes\n2. no"
+    await w.runner.tick()
+    assert f"`@gator {e['session_id'][:8]} yes`" in w.channel.posted[0]

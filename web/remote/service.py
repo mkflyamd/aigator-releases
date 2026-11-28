@@ -242,10 +242,11 @@ class RemoteService:
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
 
-    async def tick(self) -> None:
-        """One pass: report exits, finished turns and questions; stop idle sessions."""
+    async def tick(self, kind: str | None = None) -> None:
+        """One pass: report exits, finished turns and questions; stop idle sessions. `kind` limits it
+        to the sessions Remote started or to the ones it only watches."""
         for session in list(self._sessions.values()):
-            if session.stopping:
+            if session.stopping or (kind is not None and session.kind != kind):
                 continue
             if not await self._host.alive(session.pty_id):
                 if session.kind == ADOPTED:
