@@ -199,6 +199,7 @@ function _caSourceControlPanel() {
           />
         </div>
         <div id="ca-hist-list" class="ah-list"></div>
+        <div id="remote-pill-slot"></div>
       </div>
     </div>`;
 }
@@ -217,6 +218,7 @@ function _caSetLeftView(view) {
   });
   if (view === 'explorer') _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
   if (view === 'history' && window.agentHistory) agentHistory.show();
+  if (view === 'history') window.remotePill?.mount();
 }
 
 function _caLeftViewRefresh() {
