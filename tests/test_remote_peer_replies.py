@@ -374,7 +374,7 @@ async def test_an_agents_own_earlier_turn_is_never_posted(pw):
 
 async def test_a_question_shows_the_agents_name_and_how_to_answer(pw):
     await sent(pw)
-    answer(pw, "asking", "Which branch?\n1. main\n2. dev")
+    answer(pw, "idle", "Which branch?\n1. main\n2. dev")
     await pw.runner.tick()
     reply = pw.channel.posted[0]
     assert reply.startswith(f"[{commands.CROC} MergeBrain - Budget]")
@@ -455,7 +455,7 @@ async def test_the_answer_hint_names_an_agent_that_resolves(tmp_path, title):
     await w.say(f"@gator {commands.peer_label(e['title'])} hi")
     assert w.gateway.sent, "the label a person sees must pick the agent"
     w.channel.posted.clear()
-    w.host.states[e["pty_id"]] = {"state": "asking", "at": w.clock.now + 1}
+    w.host.states[e["pty_id"]] = {"state": "idle", "at": w.clock.now + 1}
     w.host.last[e["pty_id"]] = "Which one?\n1. yes\n2. no"
     await w.runner.tick()
     reply = w.channel.posted[0]
@@ -470,7 +470,7 @@ async def test_the_hint_uses_the_id_when_the_name_starts_with_a_command_word(tmp
     await baselined(w)
     await w.say(f"@gator {e['session_id'][:8]} hi")
     w.channel.posted.clear()
-    w.host.states[e["pty_id"]] = {"state": "asking", "at": w.clock.now + 1}
+    w.host.states[e["pty_id"]] = {"state": "idle", "at": w.clock.now + 1}
     w.host.last[e["pty_id"]] = "Which one?\n1. yes\n2. no"
     await w.runner.tick()
     assert f"`@gator {e['session_id'][:8]} yes`" in w.channel.posted[0]
@@ -505,3 +505,39 @@ async def test_an_answer_cannot_be_typed_into_an_adopted_sessions_prompt(svc):
     with pytest.raises(Refusal):
         await service.answer(session.id, "allow")
     assert host.typed == []
+
+
+async def test_an_adopted_sessions_waiting_state_carries_no_assistant_text(svc):
+    service, host, clock, events = svc
+    adopt(service)
+    host.last["p-1"] = "I will now run rm -rf build"
+    host.states["p-1"] = {"state": "asking", "at": clock.now + 5}
+    await service.tick()
+    assert [(e.kind, e.text) for e in events] == [("input-required", "")]
+
+
+async def test_a_peer_that_reaches_a_prompt_gets_one_stand_in_and_never_its_own_words(pw):
+    from tests.test_remote_app_terminals import Watch
+
+    await sent(pw)
+    watch = pw.runner._terminals = Watch()
+    answer(pw, "asking", "I will now run rm -rf build")
+    await pw.runner.tick()
+    assert pw.channel.posted == [commands.peer_waiting("MergeBrain", "Budget")]
+    assert "rm -rf" not in pw.channel.posted[0] and "Answer in AI Gator" in pw.channel.posted[0]
+    assert PEER_PTY in watch.skipped
+
+
+async def test_the_terminal_scan_does_not_post_again_for_a_peer_remote_watches(pw):
+    from tests.test_remote_app_terminals import Watch
+    from remote import prompts
+    from remote.bystanders import Seen
+
+    await sent(pw)
+    watch = pw.runner._terminals = Watch()
+    watch.seen.append(Seen(PEER_PTY, BUDGET, prompts.Prompt("p1", prompts.PERMISSION_APP, tool="Bash", at=pw.clock.now)))
+    answer(pw, "asking")
+    await pw.runner.tick()
+    pw.clock.now += 130
+    await pw.runner.tick()
+    assert pw.channel.posted == [commands.peer_waiting("MergeBrain", "Budget")]

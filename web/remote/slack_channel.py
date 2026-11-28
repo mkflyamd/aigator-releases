@@ -10,7 +10,7 @@ import time
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
 from remote.commands import is_own_message
-from remote.state import State
+from remote.state import UNROUTED_PREFIX, State
 
 _log = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class SlackSelfDM:
                 *self._state.prompt_messages(self.name),
                 *self._state.recently_closed_prompt_messages(self.name, now - RECENT_SECONDS),
             ]
-            if m.get("expires_at", 0) > now
+            if m.get("expires_at", 0) > now and not str(m.get("message_id", "")).startswith(UNROUTED_PREFIX)
         ]
         if not records:
             return found

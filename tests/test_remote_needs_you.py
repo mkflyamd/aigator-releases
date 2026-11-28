@@ -364,3 +364,19 @@ async def test_a_prompt_posted_without_an_id_goes_out_exactly_once(w):
     [record] = State(w.tmp / "state.json").prompt_messages("teams")
     assert record["message_id"].startswith("unrouted:")
     assert w.state.find_prompt_message("teams", "", w.clock.now) is None
+
+
+async def test_a_prompt_whose_record_cannot_be_saved_is_still_posted_only_once(w):
+    await opened(w)
+    await say(w, "run the tests")
+    w.channel.posted.clear()
+
+    def locked(*args, **kwargs):
+        raise OSError("state file is locked")
+
+    w.state.record_prompt_message = locked
+    await show(w, "pty-1", BASH_PERMISSION)
+    for _ in range(3):
+        w.clock.now += 61
+        await w.runner.tick()
+    assert len([t for t in w.channel.posted if "Needs you" in t]) == 1

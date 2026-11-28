@@ -33,7 +33,7 @@ from remote.service import (
     Session,
 )
 from remote.session_host import current_branch
-from remote.state import State
+from remote.state import UNROUTED_PREFIX, State
 from remote.window import ChatWindow
 from teams_remote_control import _COMMAND_RE as LEGACY_CODE_RE
 
@@ -44,7 +44,6 @@ AGENT_LABEL = "Claude"
 WAITING_HEADLINE = commands.WAITING_HEADLINE
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
 RETRY_POST_SECONDS = 60.0
-UNROUTED_PREFIX = "unrouted:"
 PROMPT_HOLD_SECONDS = 2 * 3600.0
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
@@ -104,6 +103,7 @@ class RemoteRunner:
         self._not_sent_noticed: set[str] = set()
         self._summarized: set[tuple[str, str]] = set()
         self._unsent: dict[tuple[str, str], float] = {}
+        self._unrecorded: set[tuple[str, str]] = set()
         self._wakes: set[asyncio.Task] = set()
         self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
@@ -591,9 +591,14 @@ class RemoteRunner:
             return False
         # Posted but the channel gave no id: remember it as sent so it is never posted twice; no reply can route to it.
         route_id = message_id or f"{UNROUTED_PREFIX}{prompt.id}"
-        self._state.record_prompt_message(
-            self._channel.name, route_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
-        )
+        try:
+            self._state.record_prompt_message(
+                self._channel.name, route_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
+            )
+        except Exception as exc:
+            # The message is out; a record that could not be saved must not make the next tick post it again.
+            _log.warning("Remote control could not save the record of a prompt message: %s", exc)
+            self._unrecorded.add((session.id, prompt.id))
         return True
 
     async def _scan_terminals(self) -> None:
@@ -602,7 +607,7 @@ class RemoteRunner:
         if self._terminals is None:
             return
         try:
-            skip = {s.pty_id for s in self._service.list()}
+            skip = {s.pty_id for s in [*self._service.list(), *self._service.watched(ADOPTED)]}
             seen = await asyncio.to_thread(self._terminals.waiting, skip)
         except Exception as exc:
             _log.warning("Remote control could not look at the terminals: %s", exc)
@@ -634,7 +639,9 @@ class RemoteRunner:
         for record in self._state.prompt_messages(self._channel.name):
             if (record["session_id"], record["prompt_id"]) not in showing:
                 self._state.clear_prompt_messages(self._channel.name, record["session_id"])
+        self._unrecorded &= showing
         posted = {(m["session_id"], m["prompt_id"]) for m in self._state.prompt_messages(self._channel.name)}
+        posted |= self._unrecorded
         now = self._clock()
         self._unsent = {k: at for k, at in self._unsent.items() if k in showing and now - at < RETRY_POST_SECONDS}
         due = needs_you.plan(
@@ -699,6 +706,9 @@ class RemoteRunner:
         if event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
+            if event.kind == "input-required":
+                await self._post(commands.peer_waiting(session.name, project))
+                return
             ref = self._peer_ref(session)
             await self._post(commands.peer_result(session.name, project, event.text, waiting, ref))
         elif event.kind == "detached" and event.text:

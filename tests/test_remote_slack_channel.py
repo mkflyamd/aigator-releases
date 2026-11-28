@@ -431,3 +431,16 @@ def test_a_prompt_closed_long_ago_is_no_longer_polled(tmp_path, slack):
     slack.calls.clear()
     assert channel.poll_replies() == []
     assert [c for c in slack.calls if c[0] == "conversations.replies"] == []
+
+
+def test_a_prompt_posted_without_an_id_is_not_asked_for_replies(tmp_path, slack, caplog):
+    from remote.state import UNROUTED_PREFIX
+
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", f"{UNROUTED_PREFIX}p1", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.calls.clear()
+    with caplog.at_level("WARNING"):
+        assert channel.poll_replies() == []
+    assert not [c for c in slack.calls if c[0] == "conversations.replies"]
+    assert caplog.records == []

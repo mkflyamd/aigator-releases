@@ -32,7 +32,7 @@ class Watch:
 
     def waiting(self, skip):
         self.skipped = skip
-        return list(self.seen)
+        return [item for item in self.seen if item.pty_id not in skip]
 
 
 @pytest.fixture

@@ -385,6 +385,11 @@ def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: 
     )
 
 
+def peer_waiting(name: str, project: str) -> str:
+    """Another agent that was sent a message is waiting on its user. Its prompt is not read, so nothing of it is shown."""
+    return _tidy(f"{peer_prefix(name, project)} Needs you: it is waiting on a prompt. Answer in AI Gator.")
+
+
 def peer_refused(name: str, reason: str) -> str:
     return system_reply(
         f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]

@@ -689,7 +689,7 @@ class RemoteService:
             session.prompt = None
         session.last_activity = max(session.last_activity, state["at"])
         self._persist(session)
-        text = "" if kind == "input-required" and not adopted else await self._host.last_message(session.pty_id)
+        text = "" if kind == "input-required" else await self._host.last_message(session.pty_id)
         if kind == "completed" and adopted:
             self._sessions.pop(session.id, None)  # watched for one answer; the next message adopts it again
         await self._emit(kind, session, text)

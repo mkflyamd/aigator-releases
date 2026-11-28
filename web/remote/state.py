@@ -14,6 +14,7 @@ _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
 PROMPT_MESSAGES_KEEP = 50
+UNROUTED_PREFIX = "unrouted:"  # the id kept for a prompt message the channel gave no id for: no reply can route to it
 LANE_STATES = ("live", "sleeping", "failed")
 MASTER_KEY = "master"
 READ_TRIES = 4
