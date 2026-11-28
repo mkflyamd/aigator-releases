@@ -5,7 +5,7 @@ import pytest
 
 import agent_wake
 from remote import commands, peers as peers_mod
-from remote.peers import Peer, PeerDirectory, PeerLimiter, PeerRefused, WakeGateway, addressable, resolve
+from remote.peers import Delivery, Peer, PeerDirectory, PeerLimiter, PeerRefused, WakeGateway, addressable, resolve
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from tests.test_remote_runner import BUDGET, World, baselined
@@ -153,7 +153,7 @@ class FakeGateway:
         if self.refuse:
             raise PeerRefused(self.refuse, "unsafe_mode")
         self.sent.append((peer.name, text, sender_name))
-        return self.woke
+        return Delivery(self.woke, peer.pty_id)
 
 
 async def test_the_directory_keeps_to_the_project_and_leaves_out_remote_sessions():
@@ -221,16 +221,33 @@ async def test_the_gateway_delivers_as_a_person_without_spending_an_agent_slot(m
 
     async def deliver_entry(sender, e, message, **kw):
         seen.update(sender=sender, entry=e, message=message, **kw)
+        await kw["before_type"]("p-woken")
         return {"woke": True}
 
     monkeypatch.setattr(agent_wake, "deliver_entry", deliver_entry)
-    gateway = WakeGateway()
-    assert await gateway.deliver(Peer(entry("Mine")), "hi", "Teams chat") is True
+    monkeypatch.setattr(peers_mod, "_read_mode", lambda pty: "default")
+    monkeypatch.setattr(peers_mod, "_screen_skips_prompts", lambda pty: False)
+    assert await WakeGateway().deliver(Peer(entry("Mine")), "hi", "Teams chat") == Delivery(True, "p-woken")
     assert seen["sender"] == {"name": "Teams chat"}
     assert seen["spend_slot"] is False
     assert seen["origin"] == "user"
     assert seen["live_wait"] == peers_mod.READY_SECONDS
-    assert seen["before_type"] == gateway._check_permission_mode
+
+
+async def test_the_permission_check_runs_on_the_terminal_that_is_typed_into(monkeypatch):
+    checked = []
+
+    async def deliver_entry(sender, e, message, **kw):
+        await kw["before_type"]("p-woken")
+        return {"woke": True}
+
+    monkeypatch.setattr(agent_wake, "deliver_entry", deliver_entry)
+    monkeypatch.setattr(peers_mod, "_read_mode", lambda pty: checked.append(pty) or "bypassPermissions")
+    monkeypatch.setattr(peers_mod, "_screen_skips_prompts", lambda pty: False)
+    monkeypatch.setattr(agent_wake, "audit_refusal", lambda *a: None)
+    with pytest.raises(PeerRefused):
+        await WakeGateway().deliver(Peer(entry("Mine")), "hi", "Teams chat")
+    assert checked == ["p-woken"]
 
 
 async def test_a_refusal_from_the_wake_path_is_audited_and_surfaced(monkeypatch):

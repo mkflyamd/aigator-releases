@@ -45,6 +45,7 @@ _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
 LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
 UNKNOWN_MENTION_SHOWN = 3
 PEERS_SHOWN = 8
+WAITING_HEADLINE = "Waiting for your answer."
 LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 
@@ -319,13 +320,48 @@ def session_list(
 
 
 def peer_label(name: str) -> str:
-    """A session name from outside this chat, flattened to one line and capped."""
-    return " ".join(name.split())[:NAME_MAX_CHARS]
+    """A session name from outside this chat: one line, no brackets, capped. It is shown inside the
+    `[name - project]` prefix, so it must not be able to end that prefix early or fake another one."""
+    one_line = " ".join(name.replace("[", "(").replace("]", ")").split())
+    return one_line.replace(" - ", " / ")[:NAME_MAX_CHARS]
 
 
 def peer_sent(name: str, woke: bool) -> str:
     body = f"Woke {peer_label(name)} and sent your message." if woke else f"Sent to {peer_label(name)}."
-    return system_reply(body, ["Its reply shows in its own terminal in AI Gator."])
+    return system_reply(body, ["Its reply comes back here when it finishes."])
+
+
+def peer_prefix(name: str, project: str) -> str:
+    """`[🐊 {peer} - {project}]`: an agent that is not Remote's own, labelled with its name and project.
+    It starts with the crocodile marker, so the loop guard ignores it. A peer that carries Gator's own
+    name, alone or followed by more words, is told apart so it cannot pass for Remote's agent."""
+    label = peer_label(name)
+    own = settings.agent_name().casefold()
+    folded = label.casefold()
+    if folded.startswith(own) and not folded[len(own) :][:1].isalnum():
+        label = f"{label} (other agent)"
+    return f"[{CROC} {label} - {peer_label(project)}]"
+
+
+def peer_exited(name: str, project: str) -> str:
+    return _tidy(
+        f"{peer_prefix(name, project)} It closed before it answered.\n\n"
+        + next_block(["`@gator list` to see which agents are running."])
+    )
+
+
+def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> str:
+    """Another agent's answer to a message sent from chat, under its own name. `text` has already been
+    through the same redaction as Remote's own replies. `ref` is what the person types to reach it."""
+    return agent_result(
+        "Claude",
+        name,
+        WAITING_HEADLINE if waiting else "",
+        text,
+        waiting,
+        prefix=peer_prefix(name, project),
+        reply_to=f"@gator {ref or peer_label(name)} ",
+    )
 
 
 def peer_refused(name: str, reason: str) -> str:
@@ -593,16 +629,18 @@ def agent_result(
     several: bool = False,
     *,
     project: str | None = None,
+    prefix: str | None = None,
+    reply_to: str | None = None,
 ) -> str:
     """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
     else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
     headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
     question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
-    prefix = agent_prefix(session, project, several)
+    prefix = prefix or agent_prefix(session, project, several)
     body = _tidy(text)
     open_tab = f"Open the {agent} tab in AI Gator"
-    answer = "Type your answer."
-    keep_going = "Reply here to keep going in this session."
+    answer = f"`{reply_to}your answer` to answer it." if reply_to else "Type your answer."
+    keep_going = f"`{reply_to}your message` to keep going." if reply_to else "Reply here to keep going in this session."
     if not body:
         options = [f"{open_tab} to see it.", answer if waiting else keep_going]
         return _tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")
@@ -611,7 +649,7 @@ def agent_result(
             return _tidy(f"{prefix} {body}")
         if not waiting:
             return _tidy(f"{prefix} {headline}\n{body}")
-        tag = f"{session}: " if several else ""
+        tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
         options = [f"`{tag}{c}`" for c in _choices(body)]
         tail = f"\n\n{next_block(options)}" if options else ""
         return _tidy(f"{prefix} {headline}\n{body}{tail}")
@@ -619,7 +657,7 @@ def agent_result(
     more = len(body) - len(shown)
     if shown.count("```") % 2:
         shown += "\n```"
-    options = [f"{open_tab} for the full reply.", answer if waiting else "Reply here to keep going."]
+    options = [f"{open_tab} for the full reply.", answer if waiting else (keep_going if reply_to else "Reply here to keep going.")]
     return _tidy(
         f"{prefix} {headline or 'Done.'} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
     )

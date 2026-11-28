@@ -15,6 +15,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from remote.commands import peer_label
+
 READY_SECONDS = 15.0
 CACHE_SECONDS = 15.0
 WINDOW_SECONDS = 3600.0
@@ -60,6 +62,14 @@ class Peer:
 
 
 @dataclass(frozen=True)
+class Delivery:
+    """`pty_id` is the terminal the text was typed into: a woken session has a new one."""
+
+    woke: bool
+    pty_id: str
+
+
+@dataclass(frozen=True)
 class Resolved:
     """What a typed name picked: one peer and the message after the name, or several that share it."""
 
@@ -70,7 +80,7 @@ class Resolved:
 
 class PeerGateway(Protocol):
     def entries(self) -> list[dict]: ...
-    async def deliver(self, peer: Peer, text: str, sender_name: str) -> bool: ...
+    async def deliver(self, peer: Peer, text: str, sender_name: str) -> Delivery: ...
 
 
 class WakeGateway:
@@ -86,11 +96,17 @@ class WakeGateway:
             if not e.get("remote_pinned") and not relay_settings.opted_out(f"pty:{e['pty_id']}")
         ]
 
-    async def deliver(self, peer: Peer, text: str, sender_name: str) -> bool:
-        """True when the session had to be woken. Raises PeerRefused."""
+    async def deliver(self, peer: Peer, text: str, sender_name: str) -> Delivery:
+        """Raises PeerRefused when nothing was typed."""
         import agent_wake
 
         sender = {"name": sender_name}
+        typed_into: list[str] = []
+
+        async def before_type(pty_id: str) -> None:
+            typed_into.append(pty_id)
+            await self._check_permission_mode(pty_id)
+
         try:
             result = await agent_wake.deliver_entry(
                 sender,
@@ -98,13 +114,13 @@ class WakeGateway:
                 text,
                 spend_slot=False,
                 origin="user",
-                before_type=self._check_permission_mode,
+                before_type=before_type,
                 live_wait=READY_SECONDS,
             )
         except agent_wake.WakeRefused as exc:
             await asyncio.to_thread(agent_wake.audit_refusal, sender, peer.name, exc.code, exc.reason, text)
             raise PeerRefused(exc.reason, exc.code) from exc
-        return bool(result.get("woke"))
+        return Delivery(bool(result.get("woke")), typed_into[-1])
 
     async def _check_permission_mode(self, pty_id: str) -> None:
         """Only a session that asks before it acts is typed into: a person's chat message must not
@@ -163,6 +179,8 @@ def resolve(peers: list[Peer], text: str, reserved: frozenset[str], colon_only: 
         names = [peer.session_id, peer.short]
         if addressable(peer, reserved):
             names.append(peer.name)
+            if peer_label(peer.name) != peer.name:
+                names.append(peer_label(peer.name))
         for name in names:
             n = len(name)
             if n < best or text[:n].casefold() != name.casefold():
@@ -241,8 +259,8 @@ class PeerDirectory:
         ]
         return sorted(peers, key=lambda p: (p.state != "live", p.name.casefold(), p.session_id))
 
-    async def deliver(self, peer: Peer, text: str, sender_name: str) -> bool:
-        woke = await self._gateway.deliver(peer, text, sender_name)
+    async def deliver(self, peer: Peer, text: str, sender_name: str) -> Delivery:
+        delivery = await self._gateway.deliver(peer, text, sender_name)
         self.limiter.record(peer.session_id)
         self._cached = None
-        return woke
+        return delivery

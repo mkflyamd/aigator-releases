@@ -288,16 +288,18 @@ async def test_stopping_a_sleeping_lane_closes_no_process_and_drops_what_was_sav
     assert calls.unpinned == ["pty-1"]
 
 
-async def test_stopping_a_live_lane_closes_it_and_drops_its_record(calls):
-    await LocalPtyHost().kill("pty-1")
+async def test_stopping_a_live_lane_closes_it_and_drops_its_record(calls, monkeypatch):
+    monkeypatch.setattr(terminal, "session_owner", lambda sid: {"remote_pinned": "1", "remote_channel": "teams"})
+    await LocalPtyHost("teams").kill("pty-1")
     assert calls.closed == ["pty-1"]
     assert calls.forgotten == ["pty-1"]
 
 
 async def test_a_live_lane_that_will_not_close_is_reported_and_keeps_its_record(calls, monkeypatch):
     monkeypatch.setattr(terminal, "close_pty_session", lambda sid: False)
+    monkeypatch.setattr(terminal, "session_owner", lambda sid: {"remote_pinned": "1", "remote_channel": "teams"})
     with pytest.raises(HostError, match="could not be closed"):
-        await LocalPtyHost().kill("pty-1")
+        await LocalPtyHost("teams").kill("pty-1")
     assert calls.forgotten == []
 
 

@@ -27,6 +27,9 @@ _log = logging.getLogger(__name__)
 IDLE_SECONDS = 8 * 3600.0
 WAKE_MIN_INTERVAL = 30.0
 LIVE, SLEEPING, FAILED = "live", "sleeping", "failed"
+STARTED = "started"
+ADOPTED = "adopted"
+ADOPTED_MISSES = 2
 
 
 class RemoteError(Exception):
@@ -71,11 +74,14 @@ class Session:
     wake_task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     wake_cancelled: bool = False
     wake_delivering: bool = False
+    kind: str = STARTED  # ADOPTED: someone else's session that Remote only watches, never closes
+    name: str = ""
+    misses: int = 0
 
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # completed | input-required | failed | canceled | lost | duplicate | replaced
+    kind: str  # completed | input-required | failed | canceled | lost | duplicate | replaced | detached
     session: Session
     text: str = ""
 
@@ -122,7 +128,12 @@ class RemoteService:
         return self._default_project()
 
     def list(self) -> list[Session]:
-        return list(self._sessions.values())
+        """The sessions Remote started. Adopted ones are watched, not listed: nothing here types into
+        them, closes them or counts them, so every command that walks this list stays safe by shape."""
+        return [s for s in self._sessions.values() if s.kind == STARTED]
+
+    def watched(self, kind: str) -> list[Session]:
+        return [s for s in self._sessions.values() if s.kind == kind]
 
     def get(self, session_id: str) -> Session:
         try:
@@ -132,7 +143,32 @@ class RemoteService:
 
     def resolve(self, short: str) -> Session | None:
         short = short.lower()
-        return next((s for s in self._sessions.values() if s.short == short), None)
+        return next((s for s in self.list() if s.short == short), None)
+
+    def adopt(self, pty_id: str, project: Project, name: str, vendor_session_id: str | None) -> Session:
+        """Starts watching another agent's session after a message was typed into it, so the turn it
+        answers with can be reported. It is never closed, woken or suspended by Remote, and not
+        persisted: a restart forgets it rather than adopting or killing what it did not start."""
+        now = self._clock()
+        session_id = f"pty:{pty_id}"
+        session = self._sessions.get(session_id)
+        if session is None:
+            session = self._sessions[session_id] = Session(
+                id=session_id,
+                pty_id=pty_id,
+                project=project,
+                short=f"peer-{pty_id[:8]}",
+                vendor_session_id=vendor_session_id,
+                created_at=now,
+                last_activity=now,
+                kind=ADOPTED,
+            )
+        if session.kind != ADOPTED:
+            raise RemoteError("That session was started by Remote control.")
+        session.name = name
+        session.last_activity = session.awaiting_since = now
+        session.waiting = False
+        return session
 
     def _short_for(self, project: Project) -> str:
         base = _slug(project.name)
@@ -146,13 +182,13 @@ class RemoteService:
 
     def several(self, session: Session) -> bool:
         """True while more than one session is live, counting one that has just left the table."""
-        return len({s.id for s in self._sessions.values()} | {session.id}) > 1
+        return len({s.id for s in self.list()} | {session.id}) > 1
 
     def _copy(self, build, session: Session, *args, **kwargs) -> str:
         return build(session.short, *args, project=session.project.name, several=self.several(session), **kwargs)
 
     def lane_of(self, project_id: str) -> Session | None:
-        return next((s for s in self._sessions.values() if s.project.id == project_id), None)
+        return next((s for s in self.list() if s.project.id == project_id), None)
 
     def _labels(self, session: Session) -> dict[str, str]:
         return {
@@ -162,7 +198,7 @@ class RemoteService:
         }
 
     def _persist(self, session: Session) -> None:
-        if self._store is None or session.id not in self._sessions:
+        if self._store is None or session.id not in self._sessions or session.kind != STARTED:
             return
         self._store.put_lane(
             self._channel,
@@ -340,6 +376,8 @@ class RemoteService:
             raise
 
     async def _deliver(self, session: Session, text: str) -> None:
+        if session.kind != STARTED:
+            raise Refusal("Messages to another agent go through its name, not through Remote control.")
         try:
             await self._host.deliver(session.pty_id, text)
         except HostError as exc:
@@ -440,6 +478,10 @@ class RemoteService:
         waited for (or cut off, once it is only typing), the process is closed and its saved record
         dropped, so nothing is left to resume."""
         session = self.get(session_id)
+        if session.kind == ADOPTED:
+            self._sessions.pop(session.id, None)
+            await self._emit("detached", session)
+            return
         session.stopping = True
         task = session.wake_task
         if task is not None and not task.done():
@@ -475,11 +517,39 @@ class RemoteService:
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
 
-    async def tick(self) -> None:
+    async def _tick_adopted(self, session: Session) -> None:
+        """An adopted session is only watched for the one answer it owes: never woken, suspended or
+        closed here. It is dropped when it answers, goes quiet for the idle limit, or is gone."""
+        try:
+            alive = await self._host.alive(session.pty_id)
+        except HostError:
+            _log.warning("remote tick: could not ask the host about %s; leaving it", session.id, exc_info=True)
+            return
+        if not alive:
+            # A slow terminal host also reads as "not alive"; one miss is not an exit.
+            session.misses += 1
+            if session.misses < ADOPTED_MISSES:
+                return
+            self._sessions.pop(session.id, None)
+            if session.awaiting_since is not None:
+                await self._emit("detached", session, "The agent process exited.")
+            return
+        session.misses = 0
+        if self._clock() - session.last_activity >= limit(self._idle):
+            self._sessions.pop(session.id, None)
+            await self._emit("detached", session)
+            return
+        await self._check_state(session)
+
+    async def tick(self, kind: str | None = None) -> None:
         """One pass: report exits, finished turns and questions; stop idle live sessions. A sleeping
-        lane never expires on idle: it costs nothing, and stays until it is stopped."""
-        for session in self.list():
-            if session.stopping or session.waking:
+        lane never expires on idle: it costs nothing, and stays until it is stopped. `kind` limits the
+        pass to the sessions Remote started or to the ones it only watches."""
+        for session in list(self._sessions.values()):
+            if session.stopping or session.waking or (kind is not None and session.kind != kind):
+                continue
+            if session.kind == ADOPTED:
+                await self._tick_adopted(session)
                 continue
             try:
                 alive = await self._host.alive(session.pty_id)
@@ -524,6 +594,10 @@ class RemoteService:
         state = await self._host.state(session.pty_id)
         if not state or state["at"] <= session.last_event_at:
             return
+        # Another agent's own questions and turns are its owner's business; only what follows a
+        # message sent from chat is reported.
+        if session.kind == ADOPTED and (session.awaiting_since is None or state["at"] < session.awaiting_since):
+            return
         if state["state"] == "asking":
             kind = "input-required"
             session.waiting = True
@@ -537,4 +611,7 @@ class RemoteService:
             session.waiting = False
         session.last_activity = max(session.last_activity, state["at"])
         self._persist(session)
-        await self._emit(kind, session, await self._host.last_message(session.pty_id))
+        text = await self._host.last_message(session.pty_id)
+        if kind == "completed" and session.kind == ADOPTED:
+            self._sessions.pop(session.id, None)  # watched for one answer; the next message adopts it again
+        await self._emit(kind, session, text)

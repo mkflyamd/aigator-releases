@@ -118,6 +118,9 @@ class LocalPtyHost:
     """Headless Claude Code sessions in this machine's PTY registry, pinned so neither the
     Code tab closing nor the idle-suspend sweep ends them."""
 
+    def __init__(self, channel: str | None = None):
+        self._channel = channel
+
     async def spawn(self, project: Project, labels: dict[str, str] | None = None) -> HostSession:
         import generic_agent
         from fastapi import HTTPException
@@ -405,6 +408,10 @@ class LocalPtyHost:
 
         # A sleeping lane has no process to close: stopping it only drops what was saved.
         if await self.alive(pty_id):
+            # Another agent's terminal is never Remote control's to close, whatever id it is handed.
+            meta = await asyncio.to_thread(terminal.session_owner, pty_id) or {}
+            if self._channel is None or meta.get("remote_pinned") != "1" or meta.get("remote_channel") != self._channel:
+                raise HostError("That session was not started by Remote control, so it was left running.")
             if not await asyncio.to_thread(terminal.close_pty_session, pty_id):
                 raise HostError("The terminal could not be closed.")
         generic_agent.unpin_session(pty_id)

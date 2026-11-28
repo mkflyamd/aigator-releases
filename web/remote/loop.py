@@ -132,7 +132,7 @@ class RemoteLoop:
 
 def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
     service = RemoteService(
-        LocalPtyHost(),
+        LocalPtyHost(channel.name),
         default_project=default_project,
         idle_seconds=settings.idle_seconds,
         channel=channel.name,
