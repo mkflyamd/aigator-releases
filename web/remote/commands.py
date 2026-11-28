@@ -1,7 +1,7 @@
 """The @gator command grammar and reply formatting, independent of any channel.
 
 Every message Gator posts follows the copy deck: the prefix and state on line 1, the body, a blank
-line, then a `Next:` block of options. SYSTEM_PREFIX is the one prefix constant; the loop guard reads it."""
+line, then a `Next:` block of options. Every post opens with the crocodile marker `[🐊`; the loop guard keys on it."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
+
+from remote import settings
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
@@ -24,9 +26,11 @@ TOO_LONG_BODY = "That message is too long to run from this chat, so it was not s
 TOO_LONG_OPTIONS = ["Start it with `@gator` to send it anyway.", "Or shorten it and send it again."]
 ATTACHMENT_BODY = "Attachments are not sent from this chat."
 ATTACHMENT_OPTION = "Describe what you need in text, and send that."
-SYSTEM_PREFIX = "[Gator"
 SETTINGS_SECTION = "Remote control"
 CROC = "\U0001F40A"
+MARKER = f"[{CROC}"
+MARKER_SHORTCODE = "[:crocodile:"
+LEGACY_PREFIX = "[Gator"
 BULLET = "•"
 DOT = "·"
 CHOICES_SHOWN = 2
@@ -37,7 +41,7 @@ PROGRESS_SECONDS = 120.0
 ELAPSED_MIN_SECONDS = 60.0
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
-OWN_MESSAGE_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
+LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
 UNKNOWN_MENTION_SHOWN = 3
 PEERS_SHOWN = 8
 LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
@@ -90,18 +94,23 @@ def _tidy(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def system_reply(body: str, options: list[str], *, croc: bool = False, after: str = "") -> str:
-    """A [Gator] notice: the state and body, a blank line, the Next block, then an optional closing line."""
-    mark = f" {CROC}" if croc else ""
+def app_prefix() -> str:
+    """The app voice: `[🐊 Gator]`."""
+    return f"[{CROC} {settings.agent_name()}]"
+
+
+def system_reply(body: str, options: list[str], *, after: str = "") -> str:
+    """An app notice: the state and body, a blank line, the Next block, then an optional closing line."""
     tail = f"\n\n{after}" if after else ""
-    return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}")
+    return _tidy(f"{app_prefix()} {body}\n\n{next_block(options)}{tail}")
 
 
 def agent_prefix(session: str, project: str | None = None, several: bool = False) -> str:
-    """`[Gator - {project}] 🐊`, or `[Gator - {session} - {project}] 🐊` while several sessions are live."""
+    """`[🐊 Gator - {project}]`, or `[🐊 Gator - {session} - {project}]` while several sessions are live.
+    The project slot is always there: it is what tells an agent reply from the app voice."""
     project = project or session
     tag = f"{session} - {project}" if several else project
-    return f"{SYSTEM_PREFIX} - {tag}] {CROC}"
+    return f"[{CROC} {settings.agent_name()} - {tag}]"
 
 
 def agent_reply(
@@ -112,8 +121,10 @@ def agent_reply(
 
 
 def is_own_message(text: str) -> bool:
-    """A message Gator wrote: the fixed `[Gator` start, or any `[label] 🐊` start, so the agent label can change."""
-    return text.lstrip().startswith(SYSTEM_PREFIX) or bool(OWN_MESSAGE_RE.match(text.lstrip()))
+    """A message Gator wrote: it starts with the crocodile marker (as the emoji or Slack's shortcode), whatever
+    the configured name. The older `[Gator` and `[label] 🐊` starts count too, so earlier posts stay ignored."""
+    text = text.lstrip()
+    return text.startswith((MARKER, MARKER_SHORTCODE, LEGACY_PREFIX)) or bool(LEGACY_OWN_RE.match(text))
 
 
 def in_words(seconds: float) -> str:
@@ -157,7 +168,6 @@ def greeting() -> str:
     return system_reply(
         f"Gator on watch. This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
         _tip_options(True),
-        croc=True,
         after=_quiet_note(),
     )
 
@@ -186,12 +196,12 @@ def already_open() -> str:
 
 def chat_closed_quiet() -> str:
     return system_reply(
-        f"Chat closed after {in_words(WINDOW_SECONDS)} of quiet.", ["`@gator hi` to open it again."], croc=True
+        f"Chat closed after {in_words(WINDOW_SECONDS)} of quiet.", ["`@gator hi` to open it again."]
     )
 
 
 def chat_closed_bye() -> str:
-    return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."], croc=True)
+    return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."])
 
 
 def timed_out(seconds: float) -> str:
@@ -334,7 +344,7 @@ def unknown_mention(name: str, known: list[str]) -> str:
     shown = " ".join(name.split())[:NAME_MAX_CHARS]
     body = f"I don't know {shown}. Start with `@gator` to send it to the agent."
     if not known:
-        return _tidy(f"{SYSTEM_PREFIX}] {body}")
+        return _tidy(f"{app_prefix()} {body}")
     return system_reply(body, [f"`{n}: your message`" for n in known[:UNKNOWN_MENTION_SHOWN]])
 
 
