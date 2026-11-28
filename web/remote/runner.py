@@ -325,11 +325,11 @@ class RemoteRunner:
         self._turns[session.id] = _Turn(started=now, last_note=now)
 
     async def _on_event(self, event: Event) -> None:
+        session = event.session
+        turn = self._turns.pop(session.id, None)
         if not self.live:
             return
-        session = event.session
         short = session.short
-        turn = self._turns.pop(session.id, None)
         several = self._several(session)
         project = session.project.name
         if event.kind in ("completed", "input-required"):
