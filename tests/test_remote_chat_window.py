@@ -960,6 +960,44 @@ def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
     assert commands.CROC in sent[0]["content"]
 
 
+def test_tp_teams_send_returns_the_arrival_time_the_skype_post_answers_with_as_the_message_id(monkeypatch):
+    import httpx
+    from routes import teams
+
+    class Skype:
+        def get_auth(self):
+            return "token", "https://chat.example"
+
+        def get_global_service(self):
+            return None
+
+    class Reply:
+        status_code = 201
+        text = '{"OriginalArrivalTime":1795839015312}'
+
+        def json(self):
+            return {"OriginalArrivalTime": 1795839015312}
+
+    monkeypatch.setattr(teams, "_get_skype_module", lambda: Skype())
+    monkeypatch.setattr(teams, "_get_my_name", lambda: "Me")
+    monkeypatch.setattr(teams, "_invalidate_chats_cache", lambda: None)
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: Reply())
+    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Online."))
+    assert out["message_id"] == "1795839015312"
+
+
+def test_the_teams_channel_records_each_post_so_it_reads_back_as_our_own(monkeypatch, tmp_path):
+    from remote import teams_channel
+    from remote.teams_channel import TeamsSelfChat
+
+    state = State(tmp_path / "s.json")
+    monkeypatch.setattr(teams_channel, "require_autosend", lambda: None)
+    monkeypatch.setattr(teams_channel, "send_message", lambda chat_id, content: "1795839015312")
+    chat = TeamsSelfChat(state=state)
+    assert chat.post(commands.online()) == "1795839015312"
+    assert state.is_own_post("teams", "1795839015312")
+
+
 # ---------------------------------------------------------------- the notepad guard: untagged text is not always for the agent
 
 CAP = commands.UNTAGGED_MAX_CHARS
