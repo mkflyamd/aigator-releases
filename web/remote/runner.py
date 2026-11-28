@@ -1154,6 +1154,7 @@ class RemoteRunner:
             await self._notify_waiting()
         else:
             self._app = {}
+            self._restart_said = False
 
     @property
     def deadline_pending(self) -> bool:

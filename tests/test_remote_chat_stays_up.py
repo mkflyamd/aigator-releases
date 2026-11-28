@@ -190,6 +190,20 @@ async def test_a_restart_that_said_so_does_not_also_say_online(r):
     assert r.channel.posted[1:] == [commands.online()]
 
 
+async def test_a_restart_line_does_not_hide_a_later_online_after_remote_control_was_off(r):
+    await opened(r)
+    await say(r, "run the tests")
+    r.state.clear_window("teams")
+    r.restart()
+    await r.runner.restore()
+    r.runner.sync_enabled(False)
+    await r.runner.tick()
+    r.runner.sync_enabled(True)
+    r.channel.posted.clear()
+    await r.runner.announce_online()
+    assert r.channel.posted == [commands.online()]
+
+
 async def test_a_start_with_nothing_to_restore_still_says_online(r):
     await opened(r)
     r.state.clear_window("teams")
