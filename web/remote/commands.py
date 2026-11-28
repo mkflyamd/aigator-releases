@@ -190,6 +190,27 @@ def timed_out(seconds: float) -> str:
     )
 
 
+def turns_off_soon(seconds: float) -> str:
+    return system_reply(
+        f"Remote control turns off in {in_words(seconds)}.",
+        [f"Need more time? Open AI Gator, then Settings, then {SETTINGS_SECTION}, and turn it back on."],
+    )
+
+
+def not_armed() -> str:
+    return system_reply(
+        "Remote control is not turned on.",
+        [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
+def timed_out_reply(seconds: float) -> str:
+    return system_reply(
+        f"Remote control timed out after {in_words(seconds)}.",
+        [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
         "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]

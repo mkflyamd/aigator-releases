@@ -14,7 +14,6 @@ MOVED_IDS = [
     "remote-default-project-slot",
     "remote-session-idle-hours",
     "remote-stale-minutes",
-    "remote-armed-max-hours",
     "remote-settings-error",
 ]
 

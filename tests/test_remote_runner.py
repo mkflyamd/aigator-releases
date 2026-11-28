@@ -3,6 +3,7 @@ import pytest
 from remote import commands
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import HostError, HostSession, Project
@@ -102,6 +103,7 @@ class World:
         self.clock = Clock()
         self.host = FakeHost()
         self.state = State(tmp_path / "state.json")
+        Master(self.state, self.clock).arm()
         self.hint = ""
         self.branch = "main"
         self.build()
@@ -313,16 +315,6 @@ async def test_rearming_after_stop_all_needs_the_switch_toggled(w):
     w.runner.sync_enabled(False)
     w.runner.sync_enabled(True)
     assert w.guard.armed is True
-
-
-async def test_remote_control_disarms_at_the_absolute_cap_and_says_so_once(w):
-    await baselined(w)
-    w.clock.now += 24 * 3600 + 1
-    await w.runner.tick()
-    await w.runner.tick()
-    assert w.channel.posted == [commands.timed_out(24 * 3600)]
-    await w.feed(w.msg(101, "@gator late", age=0))
-    assert w.host.delivered == []
 
 
 async def test_announce_online(w):
@@ -685,7 +677,7 @@ async def test_stop_all_notice_is_never_posted_to_another_chat(refusing):
 
 
 async def test_timeout_notice_is_never_posted_to_another_chat(refusing):
-    refusing.clock.now += 24 * 3600 + 1
+    refusing.clock.now += 12 * 3600 + 1
     await refusing.runner.tick()
     assert refusing.sent == []
 
@@ -694,3 +686,53 @@ async def test_skipped_notice_is_never_posted_to_another_chat(refusing):
     await baselined(refusing)
     await refusing.feed(refusing.msg(101, "@gator old", age=3600))
     assert refusing.sent == []
+
+
+async def test_a_command_with_no_window_ever_opened_gets_one_not_turned_on_reply_and_runs_nothing(tmp_path):
+    w = World(tmp_path)
+    Master(w.state, w.clock).disarm()
+    w.build()
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator list"), w.msg(3, "@gator hi"))
+    assert w.channel.posted == [commands.not_armed()]
+    assert w.host.spawn_labels == []
+
+
+async def test_not_turned_on_is_said_again_for_the_next_window_and_not_after_one_ran_out(tmp_path):
+    w = World(tmp_path)
+    Master(w.state, w.clock).disarm()
+    w.build()
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator hi"))
+    assert w.channel.posted == [commands.not_armed()]
+    Master(w.state, w.clock).arm()
+    await w.runner.tick()
+    Master(w.state, w.clock).disarm()
+    await w.runner.tick()
+    await w.feed(w.msg(3, "@gator hi"))
+    assert w.channel.posted.count(commands.not_armed()) == 2
+
+
+async def test_nothing_is_said_after_the_window_ran_out_or_for_a_stale_command(tmp_path):
+    w = World(tmp_path)
+    w.clock.now += 12 * 3600 + 1
+    await w.feed(w.msg(1, "@gator hi"))
+    assert commands.not_armed() not in w.channel.posted
+    fresh = World(tmp_path / "b")
+    Master(fresh.state, fresh.clock).disarm()
+    fresh.build()
+    await fresh.feed(fresh.msg(1, "@gator hi", age=3600))
+    assert fresh.channel.posted == []
+
+
+async def test_a_command_after_the_12_hour_window_ran_out_is_told_it_timed_out_once(tmp_path):
+    w = World(tmp_path)
+    w.clock.now += 12 * 3600 + 1
+    await w.runner.tick()
+    posted = len(w.channel.posted)
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator hi"))
+    assert w.channel.posted[posted:] == [commands.timed_out_reply(12 * 3600)]
+    assert "Remote control timed out after 12 hours." in commands.timed_out_reply(12 * 3600)
+    assert commands.not_armed() not in w.channel.posted
+    assert w.host.spawn_labels == []

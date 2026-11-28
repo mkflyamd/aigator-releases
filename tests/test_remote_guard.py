@@ -39,19 +39,6 @@ def test_slow_down_notice_is_due_once_per_window():
     assert guard.slow_down_due() is False
 
 
-def test_armed_expires_at_the_absolute_cap():
-    clock = Clock()
-    guard = Guard(clock=clock, armed_max_seconds=24 * 3600)
-    assert guard.armed is False
-    guard.arm()
-    assert guard.armed is True
-    clock.now += 24 * 3600 - 1
-    assert guard.expired() is False
-    clock.now += 2
-    assert guard.expired() is True
-    assert guard.armed is False
-
-
 def test_disarm_and_rearm():
     guard = Guard(clock=Clock())
     guard.arm()

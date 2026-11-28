@@ -4,6 +4,7 @@ import pytest
 
 from remote import loop as remote_loop
 from remote.guard import Guard
+from remote.master import Master
 from remote.loop import RemoteLoop
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
@@ -50,6 +51,7 @@ class Restartable(World):
         )
         self.channel = FakeChannel(self.state)
         self.runner = RemoteRunner(self.channel, self.service, self.guard, self.state, clock=self.clock, stale_seconds=900)
+        Master(self.state, self.clock).arm()
         self.runner.sync_enabled(True)
 
 

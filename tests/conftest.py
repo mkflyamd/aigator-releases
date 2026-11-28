@@ -58,6 +58,15 @@ def autosend_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_remote_state(tmp_path, monkeypatch):
+    """The remote-control window is stored in ~/.gator; tests must never write there."""
+    from remote import state
+
+    monkeypatch.setattr(state, "_shared", state.State(tmp_path / "remote-state.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _jira_browse_url_default():
     """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
 
