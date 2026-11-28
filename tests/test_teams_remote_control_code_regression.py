@@ -33,6 +33,6 @@ async def test_code_command_is_still_typed_into_the_opencode_terminal(monkeypatc
 async def test_gator_commands_and_replies_are_never_typed_into_the_opencode_terminal(monkeypatch):
     written = await poll_twice(
         monkeypatch,
-        [msg("4", "[Gator - Claude - budget] /code rm -rf"), msg("3", "@gator list"), msg("2", "@gator /code x"), msg("1", "old")],
+        [msg("4", "[\U0001F40A Gator - Budget] /code rm -rf"), msg("3", "@gator list"), msg("2", "@gator /code x"), msg("1", "old")],
     )
     assert written == []

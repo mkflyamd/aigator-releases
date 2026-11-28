@@ -21,8 +21,8 @@ def sent(monkeypatch, autosend_gate):
 def test_post_to_the_own_self_chat_sends_and_records_the_id(tmp_path, sent):
     state = State(tmp_path / "s.json")
     chat = TeamsSelfChat(state=state)
-    assert chat.post("[Gator] Online") == "777"
-    assert sent == [("48:notes", "<div>[Gator] Online</div>")]
+    assert chat.post("[\U0001F40A Gator] Online") == "777"
+    assert sent == [("48:notes", "<div>[\U0001F40A Gator] Online</div>")]
     assert state.is_own_post("teams", "777")
 
 
@@ -31,7 +31,7 @@ def test_post_to_any_other_chat_is_refused_and_logged(tmp_path, sent, caplog):
     assert chat.is_own_self_chat() is False
     with caplog.at_level("WARNING"):
         with pytest.raises(ChannelRefused):
-            chat.post("[Gator] hello")
+            chat.post("[\U0001F40A Gator] hello")
     assert sent == []
     assert "19:someone@thread.v2" in caplog.text
     assert "not the own self-chat" in caplog.text
@@ -39,15 +39,22 @@ def test_post_to_any_other_chat_is_refused_and_logged(tmp_path, sent, caplog):
 
 def test_post_that_could_form_a_command_is_refused(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    for text in ("@gator stop all", "hello", "  @GATOR x"):
+    for text in ("@gator stop all", "hello", "  @GATOR x", "[todo] x"):
         with pytest.raises(ChannelRefused):
             chat.post(text)
     assert sent == []
 
 
+def test_an_agent_reply_is_posted(tmp_path, sent):
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    chat.post("[\U0001F40A Gator - Budget] Done.")
+    chat.post("[\U0001F40A Gator - budget - Budget] Done.")
+    assert len(sent) == 2
+
+
 def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post("[Gator - Claude - x] <b>hi</b> & bye\nline two")
+    chat.post("[\U0001F40A Gator - x] <b>hi</b> & bye\nline two")
     html = sent[0][1]
     assert "<b>" not in html
     assert "&lt;b&gt;hi&lt;/b&gt; &amp; bye<br>line two" in html
@@ -55,12 +62,12 @@ def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sen
 
 def test_post_converts_markdown_to_teams_html(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post("[Gator - Claude - x] **Done** with `ls`\n> a note\n- one\n- two")
+    chat.post("[\U0001F40A Gator - x] **Done** with `ls`\n> a note\n- one\n- two")
     html = sent[0][1]
     assert "**" not in html
     assert "&gt; a note" not in html
     assert html == (
-        "<div>[Gator - Claude - x] <strong>Done</strong> with <code>ls</code></div>"
+        "<div>[\U0001F40A Gator - x] <strong>Done</strong> with <code>ls</code></div>"
         "<blockquote>a note</blockquote><ul><li>one</li><li>two</li></ul>"
     )
 
@@ -72,7 +79,7 @@ def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch, a
     monkeypatch.setattr(teams_channel, "send_message", boom)
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused, match="token expired"):
-        chat.post("[Gator] hi")
+        chat.post("[\U0001F40A Gator] hi")
 
 
 def test_poll_returns_inbound_messages_newest_first(monkeypatch):
@@ -102,5 +109,5 @@ def test_a_missing_or_unparseable_timestamp_has_no_time(monkeypatch):
 
 def test_a_quote_in_a_link_cannot_add_an_attribute(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post('[Gator - Claude - x] [a](https://a.com/"onmouseover="alert(1))')
+    chat.post('[\U0001F40A Gator - x] [a](https://a.com/"onmouseover="alert(1))')
     assert "<a " not in sent[0][1]

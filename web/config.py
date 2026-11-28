@@ -126,6 +126,7 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "slack_remote_control_enabled",
     # Remote control settings, checked on save by remote/settings.py
     "remote_default_project",
+    "remote_agent_name",
     "remote_session_idle_hours",
     "remote_stale_minutes",
     # Global kill-switch for agent-completed browser payments - default False,
