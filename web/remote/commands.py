@@ -23,6 +23,7 @@ NAME_MAX_CHARS = 40
 TEXT_MAX_BYTES = 4096
 REPLY_MAX_CHARS = 3500
 REPLY_CEILING_CHARS = 60000
+REPLY_MAX_PARTS = 12
 UNTAGGED_MAX_CHARS = 1500
 EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
 TOO_LONG_BODY = f"Not sent: over {UNTAGGED_MAX_CHARS} characters."
@@ -250,6 +251,12 @@ def timed_out_reply(seconds: float) -> str:
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
         "Not sent: too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+    )
+
+
+def part_not_sent(number: int, total: int) -> str:
+    return system_reply(
+        f"Part {number} of {total} did not send.", ["Ask for the reply again, or open the agent's tab in AI Gator."]
     )
 
 
@@ -769,7 +776,7 @@ def agent_result(
     """A turn's outcome as the messages to post, in order. An empty headline is a quick answer: the prefix and the
     agent's words, nothing else. Otherwise the headline, then the agent's words on the next line. A reply over
     REPLY_MAX_CHARS is never cut: it goes out in parts, each with the prefix and `(n/N)` ending its first line.
-    Only a reply past REPLY_CEILING_CHARS stops, and says so in its last part. A question ends with its choices as
+    Only a reply past REPLY_MAX_PARTS parts stops, and says so in its last part. A question ends with its choices as
     options; an empty reply ends with what the user can do."""
     prefix = prefix or agent_prefix(session, project, several)
     body = _tidy(text)
@@ -782,9 +789,11 @@ def agent_result(
     if ceiling:
         body = body[:REPLY_CEILING_CHARS].rsplit(" ", 1)[0]
     pieces = _split(body)
+    if len(pieces) > REPLY_MAX_PARTS:
+        ceiling, pieces = True, pieces[:REPLY_MAX_PARTS]
     if ceiling:
         pieces[-1] += (
-            f"\n\nThis reply is longer than {REPLY_CEILING_CHARS:,} characters, so the rest was not sent."
+            f"\n\nThis reply is longer than {REPLY_MAX_PARTS} messages, so the rest was not sent."
             f" Open the {agent} tab in AI Gator for all of it."
         )
     tag = reply_to if reply_to is not None else (f"{session}: " if several else "")

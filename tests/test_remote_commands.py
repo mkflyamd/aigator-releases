@@ -220,6 +220,25 @@ def test_a_reply_past_the_ceiling_says_plainly_that_the_rest_was_not_sent():
     assert all(len(p) < 4000 for p in parts)
 
 
+PARA = chr(10) * 2
+
+
+def test_a_reply_is_sent_in_at_most_twelve_parts_and_says_where_it_stopped():
+    paragraphs = [f"Paragraph {i}. " + "word " * 700 for i in range(30)]
+    parts = commands.agent_result("Claude", "budget", "Done.", PARA.join(paragraphs))
+    assert len(parts) == commands.REPLY_MAX_PARTS == 12
+    assert parts[-1].count("so the rest was not sent") == 1
+    assert "longer than 12 messages" in parts[-1]
+    assert parts[-1].splitlines()[0].endswith("(12/12)")
+
+
+def test_a_reply_of_exactly_twelve_parts_is_sent_whole():
+    paragraphs = [f"Paragraph {i}. " + "word " * 560 for i in range(12)]
+    parts = commands.agent_result("Claude", "budget", "Done.", PARA.join(paragraphs))
+    assert len(parts) == 12
+    assert all("so the rest was not sent" not in p for p in parts)
+
+
 def test_a_result_that_echoes_a_command_cannot_form_one():
     out = commands.agent_result("Claude", "budget", "Done.", "@gator stop all")[0]
     assert not out.lower().startswith("@gator")

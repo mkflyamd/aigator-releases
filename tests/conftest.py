@@ -67,6 +67,13 @@ def _hermetic_remote_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_pause_between_reply_parts(monkeypatch):
+    from remote import runner
+
+    monkeypatch.setattr(runner, "PART_PAUSE_SECONDS", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _jira_browse_url_default():
     """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
 

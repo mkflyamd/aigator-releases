@@ -1,6 +1,7 @@
 """Another agent's answer coming back to chat. Remote only watches such a session: it never closes
 it, never lists it as its own, and reports nothing but the turn that followed a message from chat."""
 
+import asyncio
 import pytest
 
 import generic_agent
@@ -390,6 +391,7 @@ async def test_a_long_answer_is_posted_in_parts_and_none_is_cut(pw):
     await sent(pw)
     answer(pw, "idle", "word " * 2000)
     await pw.runner.tick()
+    await asyncio.gather(*list(pw.runner._wakes))
     assert len(pw.channel.posted) == 3
     assert [m.splitlines()[0].rsplit(" ", 1)[1] for m in pw.channel.posted] == ["(1/3)", "(2/3)", "(3/3)"]
     assert all("Trimmed" not in m for m in pw.channel.posted)

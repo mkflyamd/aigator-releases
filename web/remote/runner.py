@@ -49,6 +49,7 @@ WAITING_HEADLINE = commands.WAITING_HEADLINE
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
 RETRY_POST_SECONDS = 60.0
 PROMPT_HOLD_SECONDS = 2 * 3600.0
+PART_PAUSE_SECONDS = 1.0
 # Why an open terminal cannot be messaged at all, as opposed to not right now: the lane then starts afresh.
 NOT_MESSAGEABLE = frozenset(("opted_out", "unsafe_mode", "unknown_mode", "switched_off", "admin_denied"))
 # Refusals that a moment can mend; every other code stays until someone changes the other agent's setup.
@@ -117,6 +118,7 @@ class RemoteRunner:
         self._unrecorded: set[tuple[str, str]] = set()
         self._wakes: set[asyncio.Task] = set()
         self._outbox: dict[str, list[str]] = {}
+        self._parts_lock = asyncio.Lock()
         self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
 
@@ -189,9 +191,29 @@ class RemoteRunner:
         return await self._try_post(text) or ""
 
     async def _post_all(self, parts: list[str]) -> None:
-        """The parts of one reply, in order."""
-        for part in parts:
-            await self._post(part)
+        """One reply. A reply in several parts goes out from a task of its own, paced and one reply at a time, so
+        the polling loop never waits on the channel."""
+        if len(parts) == 1:
+            await self._post(parts[0])
+        elif parts:
+            self._spawn(self._send_parts(parts))
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._wakes.add(task)
+        task.add_done_callback(self._wakes.discard)
+
+    async def _send_parts(self, parts: list[str]) -> None:
+        """Each part is tried twice. A part that still does not go is said so, and the rest follow."""
+        async with self._parts_lock:
+            for number, part in enumerate(parts, 1):
+                if number > 1:
+                    await asyncio.sleep(PART_PAUSE_SECONDS)
+                if await self._try_post(part) is not None:
+                    continue
+                await asyncio.sleep(PART_PAUSE_SECONDS)
+                if await self._try_post(part) is None:
+                    await self._post(commands.part_not_sent(number, len(parts)))
 
     async def _try_post(self, text: str) -> str | None:
         """The id of the posted message ("" when the channel posted but gave no id), or None when it did not post."""
