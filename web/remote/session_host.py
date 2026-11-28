@@ -19,6 +19,7 @@ _log = logging.getLogger(__name__)
 
 AGENT = "claude"
 _TRANSCRIPT_TRIES = 4
+_STEP_RECORDS: dict[tuple[str, str, str], dict] = {}
 _TRANSCRIPT_WAIT = 0.5
 SCREEN_TAIL_CHARS = 12000
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
@@ -504,7 +505,6 @@ class LocalPtyHost:
 
     @staticmethod
     def _last_step(pty_id: str) -> str:
-        import agent_handoff
         import agent_sessions
         from routes import terminal
         from skills.code_agent.projects import get_project
@@ -513,13 +513,20 @@ class LocalPtyHost:
         repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
         if not repo or not meta.get("session_id"):
             return ""
+        key = (repo, meta.get("agent") or AGENT, meta["session_id"])
         try:
-            rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
-            step = agent_sessions.last_step(rec) if rec else ""
+            rec = _STEP_RECORDS.get(key)
+            if rec is None:
+                rec = agent_sessions.find_session(*key)
+                if rec:
+                    if len(_STEP_RECORDS) >= 64:
+                        _STEP_RECORDS.clear()
+                    _STEP_RECORDS[key] = rec
+            return agent_sessions.last_step(rec) if rec else ""
         except Exception:
+            _STEP_RECORDS.pop(key, None)
             _log.warning("could not read the last step of %s", pty_id, exc_info=True)
             return ""
-        return agent_handoff.Redactor(agent_handoff._configured_api_keys())(step) if step else ""
 
     async def output(self, pty_id: str, since: int) -> tuple[str, int]:
         from routes import terminal

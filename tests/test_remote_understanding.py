@@ -196,11 +196,51 @@ def test_a_bare_command_is_shown_as_running_it(tmp_path):
     assert agent_sessions.last_step(rec) == "running git status"
 
 
-def test_a_note_from_the_agent_counts_as_a_step_and_is_trimmed(tmp_path):
-    note = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Checking the lane code.\nMore."}]}}
-    assert agent_sessions.last_step(_transcript(tmp_path, _user("go"), note)) == "Checking the lane code"
-    long = {"type": "assistant", "message": {"content": [{"type": "text", "text": "x" * 200}]}}
-    assert len(agent_sessions.last_step(_transcript(tmp_path, _user("go"), long))) == agent_sessions.STEP_MAX
+def test_the_agents_own_prose_is_not_a_step(tmp_path):
+    note = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Checking the lane code. More."}]}}
+    assert agent_sessions.last_step(_transcript(tmp_path, _user("go"), note)) == ""
+    rec = _transcript(tmp_path, _user("go"), _tool("Read", file_path="a.py"), note)
+    assert agent_sessions.last_step(rec) == "reading a.py"
+
+
+@pytest.mark.parametrize("field", ["url", "query", "pattern"])
+def test_the_url_query_and_pattern_of_a_call_are_not_shown(tmp_path, field):
+    rec = _transcript(tmp_path, _user("go"), _tool("WebFetch", **{field: "https://x.example/?token=abc123"}))
+    assert agent_sessions.last_step(rec) == "WebFetch"
+
+
+def test_a_long_step_is_cut_to_the_step_limit(tmp_path):
+    rec = _transcript(tmp_path, _user("go"), _tool("Bash", command="x" * 200, description="y" * 200))
+    assert len(agent_sessions.last_step(rec)) == agent_sessions.STEP_MAX
+
+
+def test_a_secret_is_redacted_before_the_line_is_cut(monkeypatch, tmp_path):
+    import agent_handoff
+
+    key = "aigator-fake-api-key"
+    monkeypatch.setattr(agent_handoff, "_configured_api_keys", lambda: [key])
+    command = "x" * 45 + key
+    assert key not in f"running {command}"[: agent_sessions.STEP_MAX] and "aigator" in f"running {command}"[:60]
+    step = agent_sessions.last_step(_transcript(tmp_path, _user("go"), _tool("Bash", command=command)))
+    assert "aigator" not in step and "fake-api" not in step
+
+
+def test_the_transcript_record_is_found_once_per_session(monkeypatch, tmp_path):
+    from remote import session_host
+
+    rec = _transcript(tmp_path, _user("go"), _tool("Read", file_path="a.py"))
+    rec |= {"id": "vendor-1"}
+    found = []
+    monkeypatch.setattr(agent_sessions, "find_session", lambda *key: found.append(key) or rec)
+    monkeypatch.setattr(session_host, "_STEP_RECORDS", {})
+    from routes import terminal
+    from skills.code_agent import projects
+
+    monkeypatch.setattr(terminal, "session_owner", lambda pty_id: {"project_id": "p", "session_id": "vendor-1"})
+    monkeypatch.setattr(projects, "get_project", lambda pid: {"repo_path": "C:/repo"})
+    assert session_host.LocalPtyHost._last_step("pty-1") == "reading a.py"
+    assert session_host.LocalPtyHost._last_step("pty-1") == "reading a.py"
+    assert len(found) == 1
 
 
 def test_nothing_done_since_the_newest_request_is_no_step(tmp_path):
