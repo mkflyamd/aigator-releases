@@ -14,16 +14,24 @@ AGENT_NAME_MAX_CHARS = 20
 LIMITS = {
     "remote_session_idle_hours": (8.0, 1.0, 72.0, "Session idle limit (hours)", 3600.0),
     "remote_stale_minutes": (15.0, 1.0, 120.0, "Stale message limit (minutes)", 60.0),
+    "remote_peer_messages_per_hour": (30.0, 0.0, 1000.0, "Messages to another agent per hour (0 for no limit)", 1.0),
 }
+COUNT_KEYS = frozenset(("remote_peer_messages_per_hour",))
 KEYS = frozenset((*SWITCH_KEYS, DEFAULT_PROJECT_KEY, AGENT_NAME_KEY, *LIMITS))
 
 
-def _seconds(key: str) -> float:
-    default, low, high, _, unit = LIMITS[key]
+def _number(key: str) -> float:
+    default, low, high, _, _unit = LIMITS[key]
     value = load_config().get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
-        value = default
-    return float(value) * unit
+        return default
+    if key in COUNT_KEYS and value != int(value):
+        return default
+    return float(value)
+
+
+def _seconds(key: str) -> float:
+    return _number(key) * LIMITS[key][4]
 
 
 def idle_seconds() -> float:
@@ -32,6 +40,11 @@ def idle_seconds() -> float:
 
 def stale_seconds() -> float:
     return _seconds("remote_stale_minutes")
+
+
+def peer_messages_per_hour() -> int:
+    """Messages one chat person may send to one other agent per hour; 0 means no limit."""
+    return int(_number("remote_peer_messages_per_hour"))
 
 
 def valid_agent_name(value: object) -> bool:
@@ -68,4 +81,6 @@ def validate(body: dict) -> str | None:
             value = body[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
                 return f"{label} must be a number from {low:g} to {high:g}."
+            if key in COUNT_KEYS and value != int(value):
+                return f"{label} must be a whole number from {low:g} to {high:g}."
     return None

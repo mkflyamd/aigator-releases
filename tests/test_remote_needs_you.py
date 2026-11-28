@@ -9,13 +9,17 @@ from remote import commands, prompts
 from remote.channel import InboundMessage
 from remote.service import Session
 from remote.state import State
-from remote.session_host import LocalPtyHost
+from remote.session_host import LocalPtyHost, Project
 from routes import terminal
 from tests.test_remote_chat_window import MINUTE, opened, say
 from tests.test_remote_prompt_flow import routed, show
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
-from tests.test_remote_runner import BUDGET, World
+from tests.test_remote_runner import BUDGET, OTHER, THIRD, World
 from tests.test_remote_session_host import BASH_DIALOG, FAKE_KEY, PTY, _Screen, _show
+
+
+FOURTH = Project(id="fourth", name="Fourth", repo_path="C:/repo/fourth")
+PROJECTS = [BUDGET, OTHER, THIRD, FOURTH]
 
 
 @pytest.fixture
@@ -31,8 +35,8 @@ async def app_session(w):
 
 async def several(w, count):
     await opened(w)
-    for _ in range(count):
-        await w.service.start(BUDGET, "task")
+    for project in PROJECTS[:count]:
+        await w.service.start(project, "task")
     w.channel.posted.clear()
 
 
@@ -92,10 +96,10 @@ async def test_only_three_messages_go_out_and_one_line_names_the_rest(w):
     assert len(routed(w)) == 3
     assert [t.split("]")[0] for t in w.channel.posted[:3]] == [
         "[🐊 Gator - budget - Budget",
-        "[🐊 Gator - budget-2 - Budget",
-        "[🐊 Gator - budget-3 - Budget",
+        "[🐊 Gator - other - Other",
+        "[🐊 Gator - third - Third",
     ]
-    assert w.channel.posted[3] == prompts.more_waiting([("budget-4", 1)])
+    assert w.channel.posted[3] == prompts.more_waiting([("fourth", 1)])
     await w.runner.tick()
     await w.runner.tick()
     assert len(w.channel.posted) == 4
@@ -111,7 +115,7 @@ async def test_the_next_waiting_session_is_posted_once_an_answer_frees_a_place(w
     assert w.host.typed == [("pty-1", (prompts.ENTER,))]
     after = w.channel.posted[before:]
     assert after[0] == "[🐊 Gator - budget - Budget] Allowed once."
-    assert after[1].startswith("[🐊 Gator - budget-4 - Budget] Needs you: permission.")
+    assert after[1].startswith("[🐊 Gator - fourth - Fourth] Needs you: permission.")
     assert len(after) == 2
     assert len(routed(w)) == 3
 
@@ -119,21 +123,21 @@ async def test_the_next_waiting_session_is_posted_once_an_answer_frees_a_place(w
 async def test_a_quote_reply_answers_the_quoted_session_even_when_the_chat_is_closed(w):
     await opened(w)
     await say(w, "run the tests")
-    await w.service.start(BUDGET, "second")
+    await w.service.start(OTHER, "second")
     await show(w, "pty-1", BASH_PERMISSION)
     await show(w, "pty-2", ASK_USER_QUESTION)
-    second = next(m for m in routed(w) if m["session_id"] == w.service.resolve("budget-2").id)
+    second = next(m for m in routed(w) if m["session_id"] == w.service.resolve("other").id)
     w.runner._window.close()
     await quote_reply(w, second["message_id"], "2")
     assert w.host.typed == [("pty-2", (prompts.DOWN, prompts.ENTER))]
-    assert w.channel.posted[-1] == "[🐊 Gator - budget-2 - Budget] Got it: Blue."
+    assert w.channel.posted[-1] == "[🐊 Gator - other - Other] Got it: Blue."
     assert [m["session_id"] for m in routed(w)] == [w.service.resolve("budget").id]
 
 
 async def test_a_quote_reply_to_the_other_session_does_not_answer_the_first(w):
     await opened(w)
     await say(w, "run the tests")
-    await w.service.start(BUDGET, "second")
+    await w.service.start(OTHER, "second")
     await show(w, "pty-1", BASH_PERMISSION)
     await show(w, "pty-2", BASH_PERMISSION)
     first = next(m for m in routed(w) if m["session_id"] == w.service.resolve("budget").id)
@@ -200,7 +204,7 @@ async def test_a_quote_reply_with_a_command_in_it_runs_that_command(w):
 async def test_an_unquoted_answer_still_works_when_exactly_one_prompt_is_pending(w):
     await opened(w)
     await say(w, "run the tests")
-    await w.service.start(BUDGET, "second")
+    await w.service.start(OTHER, "second")
     await show(w, "pty-2", ASK_USER_QUESTION)
     await say(w, "1")
     assert w.host.typed == [("pty-2", (prompts.ENTER,))]
@@ -237,7 +241,7 @@ async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting
     w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 50}
     await w.runner.tick()
     [text] = w.channel.posted[before:]
-    assert text.startswith("[🐊 Gator - budget-4 - Budget] Needs you: permission.")
+    assert text.startswith("[🐊 Gator - fourth - Fourth] Needs you: permission.")
     assert all(m["session_id"] != w.service.resolve("budget").id for m in routed(w))
 
 
@@ -249,7 +253,7 @@ async def test_a_post_that_failed_holds_no_place_and_is_tried_again_after_a_minu
     assert routed(w) == []
     w.channel.own = True
     await show(w, "pty-4", BASH_PERMISSION, at=4)
-    assert [m["session_id"] for m in routed(w)] == [w.service.resolve("budget-4").id]
+    assert [m["session_id"] for m in routed(w)] == [w.service.resolve("fourth").id]
     w.clock.now += 61
     await w.runner.tick()
     assert len(routed(w)) == 3
@@ -297,6 +301,7 @@ def real(w, tmp_path, monkeypatch):
     keys = []
     monkeypatch.setattr(terminal, "get_pty_session", lambda pty: screen)
     monkeypatch.setattr(terminal, "is_pty_alive", lambda pty: True)
+    monkeypatch.setattr(terminal, "pty_alive_strict", lambda pty: True)
     monkeypatch.setattr(terminal, "write_pty_session", lambda pty, key: keys.append(key) or True)
     w.host = LocalPtyHost()
     w.build()
@@ -314,7 +319,8 @@ async def real_prompt(w, payload):
     await opened(w)
     _show(payload)
     await w.runner.tick()
-    return routed(w)[0]["message_id"] if routed(w) else None
+    assert routed(w), "the prompt was not posted"
+    return routed(w)[0]["message_id"]
 
 
 async def test_a_quote_reply_allow_is_typed_when_the_real_checks_pass(real):

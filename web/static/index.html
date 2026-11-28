@@ -1264,7 +1264,10 @@
               <div class="section-status st-dim"></div>
               <div class="srow-info">
                 <div class="srow-label">Session idle limit</div>
-                <div class="srow-sub">Hours without a command before a session stops</div>
+                <div class="srow-sub">
+                  Hours without a command before a running session stops. A sleeping session is
+                  kept.
+                </div>
               </div>
               <div class="srow-actions">
                 <input
@@ -1292,6 +1295,26 @@
                   type="number"
                   min="1"
                   max="120"
+                  step="1"
+                  class="key-field"
+                  style="width: 80px; font-size: 0.82rem; padding: 5px 10px"
+                />
+              </div>
+            </div>
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">Messages to other agents</div>
+                <div class="srow-sub">
+                  Most messages per hour you can send to one other agent from chat. 0 for no limit
+                </div>
+              </div>
+              <div class="srow-actions">
+                <input
+                  id="remote-peer-messages-per-hour"
+                  type="number"
+                  min="0"
+                  max="1000"
                   step="1"
                   class="key-field"
                   style="width: 80px; font-size: 0.82rem; padding: 5px 10px"

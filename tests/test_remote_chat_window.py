@@ -14,7 +14,7 @@ from remote.channel import InboundMessage
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
-from remote.service import RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, RemoteService
 from remote.state import State
 from tests.test_remote_autosend_gate import SlackWorldFake, TeamsWorld
 from tests.test_remote_runner import BUDGET, OTHER, Clock, FakeChannel, FakeHost, World, baselined
@@ -124,6 +124,20 @@ async def test_an_untagged_message_runs_inside_the_window(w):
     await say(w, "run the tests")
     assert w.host.delivered == [("pty-1", "run the tests")]
     assert w.channel.posted == [commands.greeting()]
+
+
+async def test_an_untagged_mention_of_another_name_is_not_for_gator_and_gets_no_reply(w):
+    await opened(w)
+    await say(w, "@remote control I can't see the options")
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting()]
+
+
+async def test_an_untagged_mention_of_a_session_still_routes_to_it(w):
+    await opened(w)
+    await w.service.start(OTHER, "b")
+    await say(w, "@other say ok")
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
 
 
 async def test_an_untagged_message_is_ignored_when_no_window_is_open(w):
@@ -480,6 +494,7 @@ def test_not_found_text_strips_newlines_and_caps_the_name():
 AGENT_KEYS = {
     "status", "working", "progress", "done", "done_empty", "done_long",
     "waiting_choices", "waiting_open", "agent_stopped", "agent_exited",
+    "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
 NO_NEXT_KEYS = {"done", "waiting_open", "progress", "list_idle", "status"}
@@ -524,6 +539,12 @@ def _deck():
         "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
         "agent_stopped": commands.agent_stopped("budget"),
         "agent_exited": commands.agent_exited("budget"),
+        "list_sleeping": commands.session_list([("budget", "Budget", commands.SLEEPING, 0.0, "")]),
+        "status_sleeping": commands.session_status("budget", commands.SLEEPING, 1000.0, 2000.0),
+        "status_failed": commands.session_status("budget", commands.FAILED, 1000.0, 2000.0),
+        "waking": commands.waking("budget"),
+        "wake_failed": commands.wake_failed("budget", "The session could not be woken."),
+        "lane_lost": commands.lane_lost("budget"),
     }
 
 
@@ -700,6 +721,8 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
     await say(w, "bye")
     assert len(w.channel.posted) >= 7
     assert all(p.startswith(_BASE) for p in w.channel.posted)
@@ -719,9 +742,12 @@ async def test_a_session_that_asked_a_question_is_listed_as_waiting_for_you(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
     await say(w, "list")
     assert "Needs you:\n1. budget · waiting " in w.channel.posted[-1]
     assert "• `budget: your answer` to answer the longest-waiting one." in w.channel.posted[-1]
+    w.host.states["pty-1"]["state"] = "working"
     await say(w, "the first one")
     await say(w, "list")
     assert "Working:\n1. budget · " in w.channel.posted[-1]
@@ -950,6 +976,44 @@ def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
     out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Gator on watch."))
     assert out["ok"] is True and out["message_id"] == "9"
     assert commands.CROC in sent[0]["content"]
+
+
+def test_tp_teams_send_returns_the_arrival_time_the_skype_post_answers_with_as_the_message_id(monkeypatch):
+    import httpx
+    from routes import teams
+
+    class Skype:
+        def get_auth(self):
+            return "token", "https://chat.example"
+
+        def get_global_service(self):
+            return None
+
+    class Reply:
+        status_code = 201
+        text = '{"OriginalArrivalTime":1795839015312}'
+
+        def json(self):
+            return {"OriginalArrivalTime": 1795839015312}
+
+    monkeypatch.setattr(teams, "_get_skype_module", lambda: Skype())
+    monkeypatch.setattr(teams, "_get_my_name", lambda: "Me")
+    monkeypatch.setattr(teams, "_invalidate_chats_cache", lambda: None)
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: Reply())
+    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Online."))
+    assert out["message_id"] == "1795839015312"
+
+
+def test_the_teams_channel_records_each_post_so_it_reads_back_as_our_own(monkeypatch, tmp_path):
+    from remote import teams_channel
+    from remote.teams_channel import TeamsSelfChat
+
+    state = State(tmp_path / "s.json")
+    monkeypatch.setattr(teams_channel, "require_autosend", lambda: None)
+    monkeypatch.setattr(teams_channel, "send_message", lambda chat_id, content: "1795839015312")
+    chat = TeamsSelfChat(state=state)
+    assert chat.post(commands.online()) == "1795839015312"
+    assert state.is_own_post("teams", "1795839015312")
 
 
 # ---------------------------------------------------------------- the notepad guard: untagged text is not always for the agent

@@ -1,4 +1,5 @@
-"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window."""
+"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window,
+and each channel's lanes (one remote session per project, live, sleeping or failed)."""
 
 from __future__ import annotations
 
@@ -13,7 +14,10 @@ _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
 PROMPT_MESSAGES_KEEP = 50
+LANE_STATES = ("live", "sleeping", "failed")
 MASTER_KEY = "master"
+READ_TRIES = 4
+READ_RETRY_SECONDS = 0.05
 
 
 def default_path() -> Path:
@@ -32,11 +36,30 @@ class State:
         return self._path or default_path()
 
     def _load(self) -> dict:
+        """A missing or damaged file is empty. A file that exists but cannot be read right now (a
+        scanner or another process holds it) raises, so a write never replaces it with an empty one."""
+        for attempt in range(READ_TRIES):
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return {}
+            except ValueError:
+                return {}
+            except OSError:
+                if attempt + 1 == READ_TRIES:
+                    raise
+                time.sleep(READ_RETRY_SECONDS)
+            else:
+                return data if isinstance(data, dict) else {}
+        return {}
+
+    def _peek(self) -> dict:
+        """The file for a caller that only reads; unreadable counts as empty without being written."""
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            return self._load()
+        except OSError:
+            _log.warning("Remote control state could not be read", exc_info=True)
             return {}
-        return data if isinstance(data, dict) else {}
 
     def _save(self, data: dict) -> None:
         path = self.path
@@ -51,7 +74,7 @@ class State:
 
     def last_id(self, channel: str) -> str | None:
         with self._lock:
-            value = (self._load().get(channel) or {}).get("last_id")
+            value = (self._peek().get(channel) or {}).get("last_id")
         return value if isinstance(value, str) else None
 
     def set_last_id(self, channel: str, message_id: str) -> None:
@@ -62,7 +85,7 @@ class State:
 
     def channel_value(self, channel: str, key: str):
         with self._lock:
-            return (self._load().get(channel) or {}).get(key)
+            return (self._peek().get(channel) or {}).get(key)
 
     def set_channel_value(self, channel: str, key: str, value) -> None:
         with self._lock:
@@ -72,7 +95,7 @@ class State:
 
     def master(self) -> dict | None:
         with self._lock:
-            value = self._load().get(MASTER_KEY)
+            value = self._peek().get(MASTER_KEY)
         return value if isinstance(value, dict) else None
 
     def set_master(self, record: dict | None) -> None:
@@ -96,7 +119,7 @@ class State:
 
     def disarmed(self, channel: str) -> bool:
         with self._lock:
-            return (self._load().get(channel) or {}).get("disarmed") is True
+            return (self._peek().get(channel) or {}).get("disarmed") is True
 
     def set_disarmed(self, channel: str, value: bool) -> None:
         with self._lock:
@@ -107,7 +130,7 @@ class State:
     def window(self, channel: str) -> tuple[float, float] | None:
         """(opened_at, until) of the chat window, or None when it is closed."""
         with self._lock:
-            value = (self._load().get(channel) or {}).get("window")
+            value = (self._peek().get(channel) or {}).get("window")
         if not isinstance(value, dict):
             return None
         opened, until = value.get("opened_at"), value.get("until")
@@ -139,7 +162,7 @@ class State:
 
     def is_own_post(self, channel: str, message_id: str) -> bool:
         with self._lock:
-            ids = (self._load().get(channel) or {}).get("posted_ids", [])
+            ids = (self._peek().get(channel) or {}).get("posted_ids", [])
         return message_id in ids
 
     def record_prompt_message(
@@ -209,6 +232,43 @@ class State:
                     m["reply_ts"] = reply_ts
                     self._save(data)
                     return
+
+    def lanes(self, channel: str) -> dict[str, dict]:
+        """The channel's lanes by project id. A lane is the project's one remote session, live or
+        asleep; it outlives the process and a backend restart."""
+        with self._lock:
+            stored = (self._load().get(channel) or {}).get("lanes")
+        if not isinstance(stored, dict):
+            return {}
+        return {pid: lane for pid, lane in stored.items() if _valid_lane(pid, lane)}
+
+    def put_lane(self, channel: str, lane: dict) -> None:
+        """Adds the lane, or replaces the one the project already has: never two per project."""
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            lanes = entry.get("lanes")
+            if not isinstance(lanes, dict):
+                lanes = entry["lanes"] = {}
+            if lanes.get(lane["project_id"]) != lane:
+                lanes[lane["project_id"]] = lane
+                self._save(data)
+
+    def drop_lane(self, channel: str, project_id: str) -> None:
+        with self._lock:
+            data = self._load()
+            lanes = self._channel(data, channel).get("lanes")
+            if isinstance(lanes, dict) and lanes.pop(project_id, None) is not None:
+                self._save(data)
+
+
+def _valid_lane(project_id: str, lane) -> bool:
+    return (
+        isinstance(lane, dict)
+        and lane.get("project_id") == project_id
+        and all(isinstance(lane.get(k), str) and lane[k] for k in ("pty_id", "short", "repo_path"))
+        and lane.get("state") in LANE_STATES
+    )
 
 
 _shared: State | None = None

@@ -1,3 +1,6 @@
+import json
+import pytest
+
 from remote.state import State
 
 
@@ -43,3 +46,133 @@ def test_disarmed_flag_persists_across_instances_and_clears(tmp_path):
     assert State(path).disarmed("slack") is False
     State(path).set_disarmed("teams", False)
     assert State(path).disarmed("teams") is False
+
+
+def _lane(project_id="p1", **over):
+    lane = {
+        "project_id": project_id,
+        "name": "Budget",
+        "agent": "claude",
+        "repo_path": "C:/repo/budget",
+        "pty_id": "pty-1",
+        "short": "budget",
+        "vendor_session_id": "vendor-1",
+        "created_at": 1.0,
+        "last_activity": 2.0,
+        "state": "live",
+        "failure": "",
+    }
+    lane.update(over)
+    return lane
+
+
+def test_a_lane_survives_a_new_instance(tmp_path):
+    State(tmp_path / "s.json").put_lane("teams", _lane(state="sleeping"))
+    assert State(tmp_path / "s.json").lanes("teams") == {"p1": _lane(state="sleeping")}
+
+
+def test_a_project_never_has_two_lanes(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.put_lane("teams", _lane(pty_id="pty-1"))
+    st.put_lane("teams", _lane(pty_id="pty-2", short="budget-2"))
+    lanes = State(tmp_path / "s.json").lanes("teams")
+    assert list(lanes) == ["p1"]
+    assert lanes["p1"]["pty_id"] == "pty-2"
+
+
+def test_lanes_are_kept_per_channel_and_per_project(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.put_lane("teams", _lane("p1"))
+    st.put_lane("teams", _lane("p2", pty_id="pty-2", short="other"))
+    st.put_lane("slack", _lane("p1", pty_id="pty-3"))
+    assert sorted(st.lanes("teams")) == ["p1", "p2"]
+    assert list(st.lanes("slack")) == ["p1"]
+
+
+def test_a_dropped_lane_stays_dropped_after_a_restart(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.put_lane("teams", _lane())
+    st.drop_lane("teams", "p1")
+    st.drop_lane("teams", "never-existed")
+    assert State(tmp_path / "s.json").lanes("teams") == {}
+
+
+def test_an_unchanged_lane_is_not_written_again(tmp_path):
+    path = tmp_path / "s.json"
+    st = State(path)
+    st.put_lane("teams", _lane())
+    before = path.stat().st_mtime_ns
+    st.put_lane("teams", _lane())
+    assert path.stat().st_mtime_ns == before
+
+
+def test_a_malformed_lane_is_ignored_rather_than_trusted(tmp_path):
+    path = tmp_path / "s.json"
+    good = _lane("p2", pty_id="pty-2", short="other")
+    path.write_text(
+        json.dumps(
+            {
+                "teams": {
+                    "lanes": {
+                        "p1": _lane(state="bogus"),
+                        "p3": _lane("p3", pty_id=""),
+                        "p4": _lane("elsewhere"),
+                        "p2": good,
+                        "p5": "nope",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert State(path).lanes("teams") == {"p2": good}
+
+
+def test_lanes_do_not_disturb_the_other_stored_values(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.set_last_id("teams", "100")
+    st.put_lane("teams", _lane())
+    assert State(tmp_path / "s.json").last_id("teams") == "100"
+
+
+def test_a_file_that_cannot_be_read_right_now_is_never_overwritten_with_an_empty_one(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from remote import state as state_module
+
+    monkeypatch.setattr(state_module, "READ_RETRY_SECONDS", 0)
+    st = State(tmp_path / "s.json")
+    st.set_master({"armed_at": 1.0, "deadline": 2.0})
+    real = Path.read_text
+
+    def locked(self, *args, **kwargs):
+        raise PermissionError("held by another process")
+
+    monkeypatch.setattr(Path, "read_text", locked)
+    assert st.master() is None
+    with pytest.raises(OSError):
+        st.set_last_id("teams", "5")
+    monkeypatch.setattr(Path, "read_text", real)
+    assert st.master() == {"armed_at": 1.0, "deadline": 2.0}
+
+
+def test_a_read_that_fails_once_is_retried(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from remote import state as state_module
+
+    monkeypatch.setattr(state_module, "READ_RETRY_SECONDS", 0)
+    st = State(tmp_path / "s.json")
+    st.set_master({"armed_at": 1.0, "deadline": 2.0})
+    real, calls = Path.read_text, []
+
+    def flaky(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("held")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    st.set_last_id("teams", "5")
+    monkeypatch.setattr(Path, "read_text", real)
+    assert st.master() == {"armed_at": 1.0, "deadline": 2.0} and st.last_id("teams") == "5"

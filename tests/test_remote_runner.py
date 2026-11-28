@@ -5,7 +5,7 @@ from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
-from remote.service import RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, RemoteService
 from remote.session_host import HostError, HostSession, Project, StalePrompt
 from remote.state import State
 
@@ -31,6 +31,14 @@ class FakeHost:
         self.crash_on_deliver = False
         self.exit_on_deliver = False
         self.fail_kill = set()
+        self.sleeping_ids = set()
+        self.woken = []
+        self.wake_error = None
+        self.wake_gate = None
+        self.saved_ids = set()
+        self.woke_with = []
+        self.unreachable = False
+        self.suspend_on_deliver = False
 
     async def spawn(self, project, labels=None):
         self.spawn_labels.append(labels)
@@ -49,9 +57,14 @@ class FakeHost:
             raise ProcessExit()
         if self.crash_on_deliver:
             raise RuntimeError("boom")
+        if self.suspend_on_deliver:
+            self.suspend(pty_id)
+            raise HostError("The session exited before it was ready.")
         self.delivered.append((pty_id, text))
 
     async def alive(self, pty_id):
+        if self.unreachable:
+            raise HostError("The terminal host did not answer.")
         return pty_id in self.alive_ids
 
     async def kill(self, pty_id):
@@ -59,6 +72,27 @@ class FakeHost:
             raise HostError("The terminal could not be closed.")
         self.killed.append(pty_id)
         self.alive_ids.discard(pty_id)
+        self.sleeping_ids.discard(pty_id)
+
+    async def sleeping(self, pty_id):
+        return pty_id in self.sleeping_ids
+
+    async def saved(self, project, vendor_session_id):
+        return vendor_session_id in self.saved_ids
+
+    async def wake(self, pty_id, project, labels, vendor_session_id=None, cancelled=lambda: False):
+        self.woken.append((pty_id, project.id, labels))
+        self.woke_with.append((vendor_session_id, cancelled))
+        if self.wake_gate is not None:
+            await self.wake_gate.wait()
+        if self.wake_error is not None:
+            raise self.wake_error
+        self.sleeping_ids.discard(pty_id)
+        self.alive_ids.add(pty_id)
+
+    def suspend(self, pty_id):
+        self.alive_ids.discard(pty_id)
+        self.sleeping_ids.add(pty_id)
 
     async def state(self, pty_id):
         return self.states.get(pty_id)
@@ -109,6 +143,7 @@ class Clock:
 
 BUDGET = Project(id="budget", name="Budget", repo_path="C:/repo/budget")
 OTHER = Project(id="other", name="Other", repo_path="C:/repo/other")
+THIRD = Project(id="third", name="Third", repo_path="C:/repo/third")
 
 
 class World:
@@ -124,7 +159,7 @@ class World:
 
     def build(self):
         self.guard = Guard(clock=self.clock)
-        self.service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock)
+        self.service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock, channel="teams", state=self.state)
         self.channel = FakeChannel(self.state)
         self.runner = RemoteRunner(
             self.channel,
@@ -303,11 +338,11 @@ async def test_toggling_the_switch_after_a_restart_rearms(w):
 async def test_a_failed_stop_is_reported_by_name_and_keeps_remote_control_armed(w):
     await baselined(w)
     await w.service.start(BUDGET, "a")
-    await w.service.start(BUDGET, "b")
+    await w.service.start(OTHER, "b")
     w.host.fail_kill = {"pty-2"}
     await w.feed(w.msg(101, "@gator stop all"))
     reply = w.channel.posted[-1]
-    assert "budget-2" in reply and "still running" in reply
+    assert "other" in reply and "still running" in reply
     assert "Stopped every" not in reply
     assert w.guard.armed is True
     w.restart()
@@ -346,19 +381,19 @@ async def test_a_post_refused_by_the_channel_does_not_crash_the_runner(w):
 async def test_named_send_goes_to_that_session(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator first"))
-    await w.service.start(BUDGET, "second")
-    await w.feed(w.msg(102, "@gator budget-2 hello there"))
+    await w.service.start(OTHER, "second")
+    await w.feed(w.msg(102, "@gator other hello there"))
     assert w.host.delivered[-1] == ("pty-2", "hello there")
 
 
 async def test_default_with_several_live_sessions_is_refused_with_the_list(w):
     await baselined(w)
     await w.service.start(BUDGET, "a")
-    await w.service.start(BUDGET, "b")
+    await w.service.start(OTHER, "b")
     await w.feed(w.msg(101, "@gator which one?"))
     assert len(w.host.delivered) == 2
-    assert "budget-2" in w.channel.posted[-1]
-    assert w.channel.posted[-1].startswith("[\U0001F40A Gator]")
+    assert "other" in w.channel.posted[-1]
+    assert w.channel.posted[-1].startswith("[🐊 Gator]")
 
 
 async def test_text_after_a_reserved_word_is_never_a_session_name(w):
@@ -565,6 +600,8 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Delete the folder?"
     await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
     assert w.channel.posted[-1] == commands.agent_result(
         "Claude", "budget", "Waiting for your answer.", "Delete the folder?", waiting=True, project="Budget"
     )
@@ -625,10 +662,10 @@ async def test_bare_text_with_several_running_and_none_waiting_asks_which_sessio
     await baselined(w)
     await w.service.start(BUDGET, "a")
     await w.service.start(OTHER, "b")
-    await w.service.start(BUDGET, "c")
+    await w.service.start(THIRD, "c")
     await w.feed(w.msg(101, "@gator say ok"))
     assert w.host.delivered == [("pty-1", "a"), ("pty-2", "b"), ("pty-3", "c")]
-    assert w.channel.posted[-1] == commands.which_session(["budget", "other", "budget-2"])
+    assert w.channel.posted[-1] == commands.which_session(["budget", "other", "third"])
     assert "`budget: your message`" in w.channel.posted[-1]
 
 
@@ -756,3 +793,16 @@ async def test_nothing_is_said_after_the_window_ran_out_or_for_a_stale_command(t
     fresh.build()
     await fresh.feed(fresh.msg(1, "@gator hi", age=3600))
     assert fresh.channel.posted == []
+
+
+async def test_a_command_after_the_12_hour_window_ran_out_is_told_it_timed_out_once(tmp_path):
+    w = World(tmp_path)
+    w.clock.now += 12 * 3600 + 1
+    await w.runner.tick()
+    posted = len(w.channel.posted)
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator hi"))
+    assert w.channel.posted[posted:] == [commands.timed_out_reply(12 * 3600)]
+    assert "Remote control timed out after 12 hours." in commands.timed_out_reply(12 * 3600)
+    assert commands.not_armed() not in w.channel.posted
+    assert w.host.spawn_labels == []

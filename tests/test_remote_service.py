@@ -2,7 +2,7 @@ import pytest
 
 from remote import prompts
 from remote.guard import Guard
-from remote.service import Event, PromptGone, PromptRefused, RemoteError, RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, Event, PromptGone, PromptRefused, RemoteError, RemoteService
 from remote.session_host import HostError, HostSession, Project, StalePrompt
 
 
@@ -22,6 +22,10 @@ class FakeHost:
         self.killed = []
         self.fail_deliver = None
         self.fail_kill = set()
+        self.sleeping_ids = set()
+        self.woken = []
+        self.wake_error = None
+        self.wake_gate = None
 
     async def spawn(self, project, labels=None):
         self.spawn_labels.append(labels)
@@ -48,6 +52,23 @@ class FakeHost:
             raise HostError("The terminal could not be closed.")
         self.killed.append(pty_id)
         self.alive_ids.discard(pty_id)
+        self.sleeping_ids.discard(pty_id)
+
+    async def sleeping(self, pty_id):
+        return pty_id in self.sleeping_ids
+
+    async def wake(self, pty_id, project, labels):
+        self.woken.append((pty_id, project.id, labels))
+        if self.wake_gate is not None:
+            await self.wake_gate.wait()
+        if self.wake_error is not None:
+            raise self.wake_error
+        self.sleeping_ids.discard(pty_id)
+        self.alive_ids.add(pty_id)
+
+    def suspend(self, pty_id):
+        self.alive_ids.discard(pty_id)
+        self.sleeping_ids.add(pty_id)
 
     async def state(self, pty_id):
         return self.states.get(pty_id)
@@ -80,6 +101,7 @@ class Clock:
 
 
 BUDGET = Project(id="p1", name="Budget", repo_path="C:/repo/budget")
+OTHER = Project(id="p2", name="Other", repo_path="C:/repo/other")
 
 
 @pytest.fixture
@@ -113,11 +135,19 @@ async def test_start_registers_an_opaque_id_and_keeps_the_vendor_id(svc, host):
     assert host.delivered == [("pty-1", "hello")]
 
 
-async def test_second_session_in_a_project_gets_a_numbered_short_name(svc):
+async def test_a_project_has_one_lane_and_a_second_start_is_refused(svc, host):
+    first = await svc.start(BUDGET, "a")
+    with pytest.raises(RemoteError, match="Already has a session"):
+        await svc.start(BUDGET, "b")
+    assert host.n == 1
+    assert svc.list() == [first]
+
+
+async def test_two_projects_whose_names_collide_get_numbered_short_names(svc):
     await svc.start(BUDGET, "a")
-    second = await svc.start(BUDGET, "b")
-    assert second.short == "budget-2"
-    assert svc.resolve("budget-2") is second
+    clash = await svc.start(Project(id="p9", name="budget", repo_path="C:/repo/b2"), "b")
+    assert clash.short == "budget-2"
+    assert svc.resolve("budget-2") is clash
 
 
 async def test_send_to_unknown_session_is_refused(svc):
@@ -173,6 +203,8 @@ async def test_input_required_event_when_the_agent_asks(svc, host, clock):
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
     host.last["pty-1"] = "May I run rm?"
     await svc.tick()
+    clock.now += PROMPT_GRACE_SECONDS
+    await svc.tick()
     assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
     await svc.tick()
     assert len(svc.events) == 1
@@ -198,22 +230,22 @@ async def test_stop_kills_and_removes_the_session(svc, host):
 
 async def test_stop_all_stops_every_session(svc, host):
     await svc.start(BUDGET, "a")
-    await svc.start(BUDGET, "b")
+    await svc.start(OTHER, "b")
     stopped, failed = await svc.stop_all()
     assert sorted(host.killed) == ["pty-1", "pty-2"]
     assert svc.list() == []
-    assert sorted(s.short for s in stopped) == ["budget", "budget-2"]
+    assert sorted(s.short for s in stopped) == ["budget", "other"]
     assert failed == []
 
 
 async def test_stop_all_reports_the_sessions_it_could_not_stop(svc, host):
     await svc.start(BUDGET, "a")
-    await svc.start(BUDGET, "b")
+    await svc.start(OTHER, "b")
     host.fail_kill = {"pty-2"}
     stopped, failed = await svc.stop_all()
     assert [s.short for s in stopped] == ["budget"]
-    assert [s.short for s in failed] == ["budget-2"]
-    assert [s.short for s in svc.list()] == ["budget-2"]
+    assert [s.short for s in failed] == ["other"]
+    assert [s.short for s in svc.list()] == ["other"]
 
 
 async def test_a_failed_first_delivery_leaves_no_session_and_kills_the_pty(svc, host):
@@ -279,6 +311,9 @@ async def test_an_ask_without_a_prompt_file_still_posts_the_transcript(svc, host
     await svc.start(BUDGET, "a")
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
     host.last["pty-1"] = "May I run rm?"
+    await svc.tick()
+    assert svc.events == []
+    clock.now += PROMPT_GRACE_SECONDS
     await svc.tick()
     assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
     assert svc.list()[0].prompt is None

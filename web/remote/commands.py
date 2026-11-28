@@ -39,10 +39,13 @@ WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
 ACK_DELAY_SECONDS = 15.0
 PROGRESS_SECONDS = 120.0
 ELAPSED_MIN_SECONDS = 60.0
+SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
 LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
 UNKNOWN_MENTION_SHOWN = 3
+PEERS_SHOWN = 8
+WAITING_HEADLINE = "Waiting for your answer."
 LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 
@@ -52,6 +55,7 @@ class Command:
     name: str | None = None
     text: str = ""
     reply_to: str | None = None  # answer: the id of the posted prompt message this reply is for
+    tagged: bool = True  # False for an ordinary message routed by the open chat window
 
 
 def _cap_bytes(text: str) -> str:
@@ -221,6 +225,13 @@ def not_armed() -> str:
     )
 
 
+def timed_out_reply(seconds: float) -> str:
+    return system_reply(
+        f"Remote control timed out after {in_words(seconds)}.",
+        [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
         "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
@@ -272,32 +283,128 @@ def _same_name(name: str, project: str) -> bool:
     return re.sub(r"[^a-z0-9]+", "-", project.lower()).strip("-") == name
 
 
-def session_list(rows: list[tuple[str, str, str, float, str]]) -> str:
+def session_list(
+    rows: list[tuple[str, str, str, float, str]],
+    peers: list[tuple[str, str]] | None = None,
+    more: int = 0,
+    reach: str = "",
+) -> str:
     """rows are (name, project, state, seconds in that state, what to type to answer it). Grouped as the
-    History pane groups them, the longest wait first; the project is left out when it is the name."""
-    if not rows:
+    History pane groups them, the longest wait first; the project is left out when it is the name. peers
+    are other agents in the project as (name, state), already capped; `more` is how many were left out and
+    `reach` is a name that can be typed to message one of them."""
+    peers = peers or []
+    if not rows and not peers:
         return no_sessions()
-    head = f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:"
+    lines, number = [], 0
+    if rows:
+        lines.append(f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:")
+    else:
+        lines.append("No remote sessions are running.")
     waiting = sorted((r for r in rows if r[2] == WAITING), key=lambda r: -r[3])
     groups = (
         ("Needs you:", waiting),
         ("Working:", [r for r in rows if r[2] == WORKING]),
         ("Idle:", [r for r in rows if r[2] == IDLE]),
+        ("Not running:", [r for r in rows if r[2] in (SLEEPING, FAILED)]),
     )
-    lines, number = [head], 0
     for title, group in groups:
         if group:
             lines.append(title)
         for name, project, state, seconds, _ in group:
             number += 1
             where = "" if _same_name(name, project) else f" {DOT} {project}"
+            if state in (SLEEPING, FAILED):
+                lines.append(f"{number}. {name}{where} {DOT} {state}")
+                continue
             lead = "waiting " if state == WAITING else ""
             lines.append(f"{number}. {name}{where} {DOT} {lead}{elapsed_words(seconds)}")
-    if not waiting:
-        return system_reply("\n".join(lines), [])
-    name, answer = waiting[0][0], waiting[0][4]
-    what = "to allow once." if answer == "allow" else "to answer the longest-waiting one."
-    return system_reply("\n".join(lines), [f"`{name}: {answer}` {what}"])
+    if peers:
+        lines.append("\nOther agents in this project:")
+        lines.extend(f"- {name} {DOT} {state}" for name, state in peers)
+        if more:
+            lines.append(f"- {more} more.")
+    options = []
+    if waiting:
+        name, answer = waiting[0][0], waiting[0][4]
+        what = "to allow once." if answer == "allow" else "to answer the longest-waiting one."
+        options.append(f"`{name}: {answer}` {what}")
+    elif not rows:
+        options.append("Send a request and it starts a new session.")
+    else:
+        asleep = next((r[0] for r in rows if r[2] == SLEEPING), None)
+        if asleep:
+            options.append(f"`{asleep}: your message` to wake it.")
+    if peers:
+        options.append(f"`@gator {reach or peers[0][0]} your message` to message another agent.")
+    return system_reply("\n".join(lines), options)
+
+
+def peer_label(name: str) -> str:
+    """A session name from outside this chat: one line, no brackets, capped. It is shown inside the
+    `[name - project]` prefix, so it must not be able to end that prefix early or fake another one."""
+    one_line = " ".join(name.replace("[", "(").replace("]", ")").split())
+    return one_line.replace(" - ", " / ")[:NAME_MAX_CHARS]
+
+
+def peer_sent(name: str, woke: bool) -> str:
+    body = f"Woke {peer_label(name)} and sent your message." if woke else f"Sent to {peer_label(name)}."
+    return system_reply(body, ["Its reply comes back here when it finishes."])
+
+
+def peer_prefix(name: str, project: str) -> str:
+    """`[🐊 {peer} - {project}]`: an agent that is not Remote's own, labelled with its name and project.
+    It starts with the crocodile marker, so the loop guard ignores it. A peer that carries Gator's own
+    name, alone or followed by more words, is told apart so it cannot pass for Remote's agent."""
+    label = peer_label(name)
+    own = settings.agent_name().casefold()
+    folded = label.casefold()
+    if folded.startswith(own) and not folded[len(own) :][:1].isalnum():
+        label = f"{label} (other agent)"
+    return f"[{CROC} {label} - {peer_label(project)}]"
+
+
+def peer_exited(name: str, project: str) -> str:
+    return _tidy(
+        f"{peer_prefix(name, project)} It closed before it answered.\n\n"
+        + next_block(["`@gator list` to see which agents are running."])
+    )
+
+
+def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> str:
+    """Another agent's answer to a message sent from chat, under its own name. `text` has already been
+    through the same redaction as Remote's own replies. `ref` is what the person types to reach it."""
+    return agent_result(
+        "Claude",
+        name,
+        WAITING_HEADLINE if waiting else "",
+        text,
+        waiting,
+        prefix=peer_prefix(name, project),
+        reply_to=f"@gator {ref or peer_label(name)} ",
+    )
+
+
+def peer_refused(name: str, reason: str) -> str:
+    return system_reply(
+        f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]
+    )
+
+
+def peer_limit(name: str, limit: int, wait_seconds: float) -> str:
+    return system_reply(
+        f"That is {limit} messages to {peer_label(name)} in the last hour, the most allowed. Not sent.",
+        [f"Wait {in_words(wait_seconds)}, then send it again.", f"Raise the limit in Settings, under {SETTINGS_SECTION}."],
+    )
+
+
+def peer_ambiguous(name: str, choices: list[tuple[str, str]]) -> str:
+    """Several agents share a name. choices are (short id, state); the id is what to type instead."""
+    lines = [f"- `{short}` {DOT} {state}" for short, state in choices]
+    return system_reply(
+        f"More than one agent is called {peer_label(name)}:\n" + "\n".join(lines),
+        [f"`{choices[0][0]} your message` to pick one by its id."],
+    )
 
 
 def which_session(names: list[str]) -> str:
@@ -327,11 +434,17 @@ def mention_needs_text(name: str) -> str:
 def session_status(
     session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
 ) -> str:
-    lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
-    text = f"{lead} since {clock_time(since)}."
-    if clock_time(last_activity) != clock_time(since):
-        text += f"\nLast activity {clock_time(last_activity)}."
-    return agent_reply(session, text, [], project=project, several=several)
+    last = f"Last activity {clock_time(last_activity)}."
+    if state == SLEEPING:
+        text, options = f"Asleep to free memory.\n{last}", ["Reply here to wake it.", f"`stop {session}` to stop it."]
+    elif state == FAILED:
+        text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
+    else:
+        lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
+        text, options = f"{lead} since {clock_time(since)}.", []
+        if clock_time(last_activity) != clock_time(since):
+            text += f"\n{last}"
+    return agent_reply(session, text, options, project=project, several=several)
 
 
 def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
@@ -380,6 +493,110 @@ def asks_a_question(text: str) -> bool:
 def agent_stopped(session: str, *, project: str | None = None, several: bool = False) -> str:
     options = ["Send a message to start it again.", "`list` to see what is running."]
     return agent_reply(session, "Stopped.", options, project=project, several=several)
+
+
+def waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """Posted the moment a message reaches a sleeping session, before the wake finishes."""
+    return agent_reply(
+        session,
+        "Waking up. Your message goes in once it is ready.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def wake_failed(
+    session: str, reason: str = "The session could not be woken.", *, permanent: bool = False,
+    project: str | None = None, several: bool = False,
+) -> str:
+    """Nothing was sent. A transient failure can be retried by sending again; a permanent one cannot."""
+    option = (
+        f"`stop {session}`, then send a message to start a new session."
+        if permanent
+        else f"Send your message again to retry, or `stop {session}`."
+    )
+    return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
+
+
+def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A message that arrives while the wake is under way. It is not queued."""
+    return agent_reply(
+        session,
+        "Still waking up. That message was not sent.",
+        ["Send it again once it is ready.", f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def wake_too_soon(session: str, wait_seconds: float, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Could not be woken a moment ago. Nothing was sent.",
+        [f"Try again in {int(wait_seconds) + 1} seconds."],
+        project=project,
+        several=several,
+    )
+
+
+def already_has_session(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Already has a session in this project.",
+        [f"`{session}: your message` to use it.", f"`stop {session}` to end it first."],
+        project=project,
+        several=several,
+    )
+
+
+def send_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, f"Nothing was sent.\n{reason}", [f"Send your message again to retry, or `stop {session}`."],
+        project=project, several=several,
+    )
+
+
+def duplicate_lane(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A second running terminal for a project that already has a remote session."""
+    return agent_reply(
+        session,
+        "A second remote terminal for this project is running. It was left alone, and chat cannot manage it.",
+        ["Close it in AI Gator."],
+        project=project,
+        several=several,
+    )
+
+
+LANE_REPLACED_REASON = "A newer remote terminal for this project replaced this lane."
+
+
+def lane_replaced(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """After a restart a newer terminal was found for a project whose lane still has a saved session."""
+    return agent_reply(
+        session,
+        f"{LANE_REPLACED_REASON} Its saved session was kept, and the newer terminal was left running.",
+        [f"`stop {session}` to clear the saved session.", "Close the newer terminal in AI Gator if it is not wanted."],
+        project=project,
+        several=several,
+    )
+
+
+def no_default_project() -> str:
+    return system_reply(
+        "No default project is set, so there is nowhere to start a session.",
+        [f"Pick a default project in AI Gator {SETTINGS_SECTION} settings."],
+    )
+
+
+def command_failed() -> str:
+    return system_reply("That command failed and was not retried.", ["`help` to see what you can do."])
+
+
+def lane_lost(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, "The saved session is gone.", ["Send a message to start a new session."], project=project, several=several
+    )
 
 
 def agent_exited(session: str, *, project: str | None = None, several: bool = False) -> str:
@@ -434,16 +651,18 @@ def agent_result(
     several: bool = False,
     *,
     project: str | None = None,
+    prefix: str | None = None,
+    reply_to: str | None = None,
 ) -> str:
     """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
     else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
     headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
     question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
-    prefix = agent_prefix(session, project, several)
+    prefix = prefix or agent_prefix(session, project, several)
     body = _tidy(text)
     open_tab = f"Open the {agent} tab in AI Gator"
-    answer = "Type your answer."
-    keep_going = "Reply here to keep going in this session."
+    answer = f"`{reply_to}your answer` to answer it." if reply_to else "Type your answer."
+    keep_going = f"`{reply_to}your message` to keep going." if reply_to else "Reply here to keep going in this session."
     if not body:
         options = [f"{open_tab} to see it.", answer if waiting else keep_going]
         return _tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")
@@ -452,7 +671,7 @@ def agent_result(
             return _tidy(f"{prefix} {body}")
         if not waiting:
             return _tidy(f"{prefix} {headline}\n{body}")
-        tag = f"{session}: " if several else ""
+        tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
         options = [f"`{tag}{c}`" for c in _choices(body)]
         tail = f"\n\n{next_block(options)}" if options else ""
         return _tidy(f"{prefix} {headline}\n{body}{tail}")
@@ -460,7 +679,7 @@ def agent_result(
     more = len(body) - len(shown)
     if shown.count("```") % 2:
         shown += "\n```"
-    options = [f"{open_tab} for the full reply.", answer if waiting else "Reply here to keep going."]
+    options = [f"{open_tab} for the full reply.", answer if waiting else (keep_going if reply_to else "Reply here to keep going.")]
     return _tidy(
         f"{prefix} {headline or 'Done.'} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
     )

@@ -139,7 +139,7 @@ def world(tmp_path, monkeypatch):
     w = {"live": {}, "states": {}, "watched": set(), "closed": [], "close_fails": False, "transcript_ok": True}
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     monkeypatch.setattr(agent_suspend, "_unwatched_since", {})
-    monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(w["live"]))
+    monkeypatch.setattr(terminal, "live_pty_labels", lambda strict=False: dict(w["live"]))
     monkeypatch.setattr(terminal, "has_viewer", lambda pid, grace_seconds=90.0, visible_only=True: pid in w["watched"])
     monkeypatch.setattr(
         agent_suspend, "_current_session", lambda meta, at: {"title": "Design head"} if w["transcript_ok"] else None
@@ -207,6 +207,17 @@ def test_the_record_keeps_the_session_title_so_a_peer_can_be_named(world):
     agent_suspend.sweep(NOW)
     agent_suspend.sweep(NOW + IDLE)
     assert agent_suspend.suspended_record(a)["title"] == "Design head"
+
+
+def test_a_remote_lane_terminal_keeps_its_remote_labels_in_the_record_and_a_plain_one_does_not(world):
+    lane, plain = pty_id(), pty_id()
+    world["live"][lane] = {**labels(session="claude-sess-9"), "remote_pinned": "1", "remote_channel": "teams", "remote_project": "Budget"}
+    world["live"][plain] = labels(session="claude-sess-10")
+    world["states"][lane] = world["states"][plain] = idle_for(IDLE * 4)
+    agent_suspend.sweep(NOW)
+    agent_suspend.sweep(NOW + IDLE)
+    assert agent_suspend.suspended_record(lane)["labels"] == {"remote_channel": "teams", "remote_project": "Budget"}
+    assert "labels" not in agent_suspend.suspended_record(plain)
 
 
 def test_suspended_claude_agents_are_listed_for_other_agents_to_find(world):
@@ -355,7 +366,7 @@ def test_live_pty_labels_merges_host_and_in_process_sessions(monkeypatch):
     monkeypatch.setattr(
         terminal,
         "_list_host_sessions",
-        lambda: [{"id": "h1", "done": False, "meta": {"agent": "claude"}}, {"id": "h2", "done": True, "meta": {}}],
+        lambda strict=False: [{"id": "h1", "done": False, "meta": {"agent": "claude"}}, {"id": "h2", "done": True, "meta": {}}],
     )
     monkeypatch.setattr(
         terminal,

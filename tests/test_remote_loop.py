@@ -48,6 +48,40 @@ def s(tmp_path):
     return Setup(tmp_path)
 
 
+async def test_a_second_backend_on_the_same_channel_stays_silent_until_the_owner_lets_go(s, tmp_path):
+    from remote.owner import ChannelOwner
+
+    other = Setup(tmp_path / "other")
+    s.loop = RemoteLoop(s.runner, lambda: s.enabled, clock=s.clock, poll_every=10.0, owner=ChannelOwner("teams", tmp_path))
+    other.loop = RemoteLoop(
+        other.runner, lambda: other.enabled, clock=other.clock, poll_every=10.0, owner=ChannelOwner("teams", tmp_path)
+    )
+    s.master.arm()
+    other.master.arm()
+    s.enabled = other.enabled = True
+    await s.loop.step()
+    await other.loop.step()
+    assert s.channel.posted == [commands.online()]
+    assert other.channel.polls == 0
+    assert other.channel.posted == []
+    s.enabled = False
+    await s.loop.step()
+    other.clock.now += 10
+    await other.loop.step()
+    assert other.channel.polls == 1
+
+
+async def test_the_loops_for_different_channels_do_not_block_each_other(s, tmp_path):
+    from remote.owner import ChannelOwner
+
+    teams, slack = ChannelOwner("teams", tmp_path), ChannelOwner("slack", tmp_path)
+    try:
+        assert teams.acquire() and slack.acquire()
+    finally:
+        teams.release()
+        slack.release()
+
+
 async def test_disabled_does_nothing(s):
     await s.loop.step()
     assert s.channel.polls == 0
@@ -160,7 +194,7 @@ def test_the_slack_switch_is_an_allowed_config_key():
 async def test_the_slack_loop_follows_only_the_slack_switch(tmp_path, monkeypatch):
     config = {"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}
     monkeypatch.setattr(remote_loop, "load_config", lambda: config)
-    monkeypatch.setattr(remote_loop, "LocalPtyHost", FakeHost)
+    monkeypatch.setattr(remote_loop, "LocalPtyHost", lambda channel: FakeHost())
     channels = {}
     monkeypatch.setattr(remote_loop, "TeamsSelfChat", lambda state: channels.setdefault("teams", PollingChannel(state)))
     monkeypatch.setattr(remote_loop, "SlackSelfDM", lambda state: channels.setdefault("slack", SlackPolling(state)))

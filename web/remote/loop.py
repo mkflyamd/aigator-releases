@@ -13,7 +13,9 @@ from typing import Callable
 from config import load_config
 from remote import commands, settings
 from remote.guard import Guard
+from remote.peers import PeerDirectory, WakeGateway
 from remote.master import Master
+from remote.owner import ChannelOwner
 from remote.runner import RemoteRunner
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
@@ -57,8 +59,10 @@ class RemoteLoop:
         enabled: Callable[[], bool],
         clock: Callable[[], float] = time.time,
         poll_every: float = POLL_SECONDS,
+        owner: ChannelOwner | None = None,
     ):
         self._runner = runner
+        self._owner = owner
         self._enabled = enabled
         self._clock = clock
         self._poll_every = poll_every
@@ -85,10 +89,17 @@ class RemoteLoop:
         self._restored = True
         return True
 
+    async def shutdown(self) -> None:
+        await self._runner.shutdown()
+
     async def step(self) -> None:
         enabled = self._enabled()
+        if enabled and self._owner is not None and not self._owner.acquire():
+            return
         self._runner.sync_enabled(enabled)
         if not enabled:
+            if self._owner is not None and not self._runner.deadline_pending:
+                self._owner.release()
             if not self._runner.window_open:
                 self._was_live = False
             self._last_poll = None
@@ -121,7 +132,11 @@ class RemoteLoop:
 
 def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
     service = RemoteService(
-        LocalPtyHost(), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
+        LocalPtyHost(channel.name),
+        default_project=default_project,
+        idle_seconds=settings.idle_seconds,
+        channel=channel.name,
+        state=state,
     )
     runner = RemoteRunner(
         channel,
@@ -131,8 +146,9 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         stale_seconds=settings.stale_seconds,
         master=Master(state),
         first_prompt_hint=commands.BREVITY_HINT,
+        peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
     )
-    return RemoteLoop(runner, enabled)
+    return RemoteLoop(runner, enabled, owner=ChannelOwner(channel.name))
 
 
 def build_loops(state: State | None = None) -> list[RemoteLoop]:
@@ -145,12 +161,15 @@ def build_loops(state: State | None = None) -> list[RemoteLoop]:
 
 async def _run_channel(loop: RemoteLoop) -> None:
     """One task per channel: a command that waits on its agent holds only its own channel."""
-    while True:
-        await asyncio.sleep(STEP_SECONDS)
-        try:
-            await loop.step()
-        except Exception:
-            _log.warning("Remote control step failed", exc_info=True)
+    try:
+        while True:
+            await asyncio.sleep(STEP_SECONDS)
+            try:
+                await loop.step()
+            except Exception:
+                _log.warning("Remote control step failed", exc_info=True)
+    finally:
+        await asyncio.shield(loop.shutdown())
 
 
 async def remote_control_loop() -> None:

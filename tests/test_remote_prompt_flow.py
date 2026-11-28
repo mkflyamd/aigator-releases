@@ -4,6 +4,8 @@ reply types exactly that answer, or nothing."""
 import pytest
 
 from remote import commands, prompts, runner
+from remote.service import PROMPT_GRACE_SECONDS
+from remote.session_host import HostError
 from tests.test_remote_chat_window import MINUTE, WINDOW, opened, say, window_of
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
 from tests.test_remote_runner import BUDGET, OTHER, World
@@ -363,3 +365,83 @@ async def test_a_prompt_that_shows_up_after_the_asking_state_is_posted_when_it_d
     assert len(w.channel.posted) == 1 and "Tool: Bash" in w.channel.posted[0]
     await say(w, "allow")
     assert w.host.typed == [("pty-1", (prompts.ENTER,))]
+
+
+def refuse_typing_while_asking(w):
+    """What the terminal does: a message typed at a permission dialog is refused, not sent."""
+    original = w.host.deliver
+
+    async def deliver(pty_id, text):
+        if w.host.states.get(pty_id, {}).get("state") == "asking":
+            raise HostError("The agent is waiting for the user to answer a permission prompt.")
+        await original(pty_id, text)
+
+    w.host.deliver = deliver
+
+
+async def test_a_reply_before_the_tick_has_seen_the_prompt_shows_it_and_types_nothing(w):
+    await opened(w)
+    await say(w, "run the tests")
+    refuse_typing_while_asking(w)
+    when = w.clock.now + 5
+    w.host.states["pty-1"] = {"state": "asking", "at": when}
+    w.host.prompts["pty-1"] = prompts.parse(BASH_PERMISSION, when)
+    w.channel.posted.clear()
+    await say(w, "what is the status")
+    assert w.channel.posted == [
+        "[\U0001F40A Gator - budget - Budget] Not sent: this session is waiting on a permission.\n"
+        "Tool: Bash\nCommand: echo hi > out.txt\n\n"
+        "Next:\n• `allow` to allow once.\n• `deny` to deny."
+    ]
+    assert w.host.delivered == [("pty-1", "run the tests")] and w.host.typed == []
+
+
+async def test_a_reply_while_the_agent_asks_with_no_prompt_file_points_to_the_app(w):
+    await opened(w)
+    await say(w, "run the tests")
+    refuse_typing_while_asking(w)
+    w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
+    w.channel.posted.clear()
+    await say(w, "what is the status")
+    [out] = w.channel.posted
+    assert "waiting for the user" not in out
+    assert prompts.OPEN_APP_QUESTION in out and "Not sent:" in out
+    assert w.host.typed == []
+
+
+async def test_status_shows_the_prompt_the_session_is_asking(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    await say(w, "status")
+    assert w.channel.posted[-1] == prompts.waiting_message("budget", "Budget", w.service.list()[0].prompt)
+
+
+async def test_an_ask_with_no_prompt_file_and_no_transcript_is_an_app_only_message_that_keeps_the_chat_open(w):
+    await opened(w)
+    await say(w, "run the tests")
+    w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
+    w.channel.posted.clear()
+    await w.runner.tick()
+    assert w.channel.posted == []
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
+    [out] = w.channel.posted
+    assert "No text came back" not in out and prompts.OPEN_APP_QUESTION in out
+    w.clock.now += WINDOW + 1
+    await w.runner.tick()
+    assert window_of(w) is not None
+    assert commands.chat_closed_quiet() not in w.channel.posted
+
+
+async def test_the_asking_state_rewritten_for_the_same_prompt_is_posted_once(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    w.channel.posted.clear()
+    for later in (10, 20):
+        w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + later}
+        await w.runner.tick()
+    assert w.channel.posted == []
+    await show(w, "pty-1", {**BASH_PERMISSION, "tool_input": {"command": "ls"}}, at=30)
+    assert len(w.channel.posted) == 1 and "Command: ls" in w.channel.posted[0]

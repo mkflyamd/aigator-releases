@@ -22,14 +22,23 @@ STATE_MAX_AGE_SECONDS = 86400
 CRUSH_HOOKS_MIN = (0, 99)
 
 _PTY_FILE = '"$GATOR_AGENT_STATE_DIR/$GATOR_PTY_ID"'
+_MODE_FILE = '"$GATOR_AGENT_STATE_DIR/$GATOR_PTY_ID.mode"'
 _GUARD = '[ -n "$GATOR_PTY_ID" ] && '
+# The hook's stdin is JSON. Only an unescaped key can match, so text a user types
+# cannot forge it: inside a JSON string every quote is escaped.
+_MODE_CAPTURE = (
+    r"""m=$(sed -n 's/.*"permission_mode" *: *"\([A-Za-z]*\)".*/\1/p' | head -n 1); """
+)
 
 
-def _write_cmd(word: str) -> str:
-    return f"{_GUARD}printf {word} > {_PTY_FILE}"
+def _write_cmd(word: str, with_mode: bool = False) -> str:
+    cmd = f"printf {word} > {_PTY_FILE}"
+    if with_mode:
+        cmd = f'{cmd}; {_MODE_CAPTURE}if [ -n "$m" ]; then printf %s "$m" > {_MODE_FILE}; fi'
+    return f"{_GUARD}{{ {cmd}; }}" if with_mode else f"{_GUARD}{cmd}"
 
 
-_REMOVE_CMD = f"{_GUARD}rm -f {_PTY_FILE}"
+_REMOVE_CMD = f"{_GUARD}rm -f {_PTY_FILE} {_MODE_FILE}"
 _PROMPT_FILE = '"$GATOR_AGENT_STATE_DIR/$GATOR_PTY_ID.prompt"'
 PROMPT_SUFFIX = ".prompt"
 PROMPT_MAX_BYTES = 64 * 1024
@@ -38,9 +47,9 @@ PROMPT_MAX_BYTES = 64 * 1024
 _PROMPT_WRITE_CMD = f"{_GUARD}cat > {_PROMPT_FILE}.tmp && mv -f {_PROMPT_FILE}.tmp {_PROMPT_FILE}"
 
 
-def _turn_cmd(word: str) -> str:
+def _turn_cmd(word: str, with_mode: bool = False) -> str:
     """A state word that also drops the pending prompt: the agent has moved on."""
-    return f"{_write_cmd(word)}; rm -f {_PROMPT_FILE}"
+    return f"{_write_cmd(word, with_mode)}; rm -f {_PROMPT_FILE}"
 
 
 def launch_env(pty_id: str) -> dict[str, str]:
@@ -58,14 +67,14 @@ def _command_hook(command: str, matcher: str | None = None) -> list[dict]:
 def _claude_settings() -> dict:
     return {
         "hooks": {
-            "UserPromptSubmit": _command_hook(_turn_cmd("working")),
+            "UserPromptSubmit": _command_hook(_turn_cmd("working", with_mode=True)),
             "PostToolUse": _command_hook(_turn_cmd("working")),
             "PermissionRequest": _command_hook(_PROMPT_WRITE_CMD),
             "Notification": _command_hook(_write_cmd("asking"), "permission_prompt|elicitation_dialog"),
-            "Stop": _command_hook(_turn_cmd("idle")),
+            "Stop": _command_hook(_turn_cmd("idle", with_mode=True)),
             # A woken agent is ready for a message once it has started; compact and clear
             # also fire SessionStart, and those happen mid-turn.
-            "SessionStart": _command_hook(_turn_cmd("idle"), "startup|resume"),
+            "SessionStart": _command_hook(_turn_cmd("idle", with_mode=True), "startup|resume"),
             "SessionEnd": _command_hook(f"{_REMOVE_CMD}; rm -f {_PROMPT_FILE}"),
         }
     }
@@ -185,11 +194,23 @@ def clear_prompt(pty_id: str) -> None:
         pass
 
 
+def read_mode(pty_id: str) -> str | None:
+    """The permission mode the agent last reported (default, plan, acceptEdits,
+    bypassPermissions, ...), or None when it has not reported one."""
+    try:
+        uuid.UUID(pty_id)
+        mode = (STATE_DIR / f"{pty_id}.mode").read_text(encoding="utf-8").strip()
+    except (ValueError, OSError):
+        return None
+    return mode if re.fullmatch(r"[A-Za-z]{1,40}", mode) else None
+
+
 def clear(pty_id: str) -> None:
     """Drop a terminal's reported state, so a reused id does not inherit its last word."""
     try:
         uuid.UUID(pty_id)
         (STATE_DIR / pty_id).unlink(missing_ok=True)
+        (STATE_DIR / f"{pty_id}.mode").unlink(missing_ok=True)
     except (ValueError, OSError):
         pass
     clear_prompt(pty_id)
