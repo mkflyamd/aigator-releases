@@ -39,7 +39,7 @@ async def test_a_permission_is_posted_with_the_agent_name_the_command_and_number
     w.channel.posted.clear()
     await show(w, "pty-1", BASH_PERMISSION)
     assert w.channel.posted == [
-        "[Gator - budget - Budget] Needs you: permission.\n"
+        "[\U0001F40A Gator - budget - Budget] Needs you: permission.\n"
         "Tool: Bash\nCommand: echo hi > out.txt\n\n"
         "Next:\n• `allow` to allow once.\n• `deny` to deny."
     ]
@@ -63,8 +63,8 @@ async def test_each_waiting_session_gets_its_own_message(w):
     await show(w, "pty-1", BASH_PERMISSION)
     await show(w, "pty-2", ASK_USER_QUESTION)
     assert len(w.channel.posted) == 2
-    assert w.channel.posted[0].startswith("[Gator - budget - Budget] Needs you: permission.")
-    assert w.channel.posted[1].startswith("[Gator - other - Other] Needs you: a question.")
+    assert w.channel.posted[0].startswith("[\U0001F40A Gator - budget - Budget] Needs you: permission.")
+    assert w.channel.posted[1].startswith("[\U0001F40A Gator - other - Other] Needs you: a question.")
     assert {m["session_id"] for m in routed(w)} == {s.id for s in w.service.list()}
     assert len({m["message_id"] for m in routed(w)}) == 2
 
@@ -76,7 +76,7 @@ async def test_allow_types_enter_confirms_and_leaves_nothing_pending(w):
     await say(w, "allow")
     assert w.host.typed == [("pty-1", (prompts.ENTER,))]
     assert w.host.delivered == [("pty-1", "run the tests")]
-    assert w.channel.posted[-1] == "[Gator - budget - Budget] Allowed once."
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Allowed once."
     assert routed(w) == []
     assert w.service.list()[0].prompt is None
 
@@ -87,10 +87,10 @@ async def test_deny_types_escape_and_the_turn_is_over(w):
     await show(w, "pty-1", BASH_PERMISSION)
     await say(w, "deny")
     assert w.host.typed == [("pty-1", (prompts.ESCAPE,))]
-    assert w.channel.posted[-1] == "[Gator - budget - Budget] Denied."
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Denied."
     assert w.runner._turns == {}
     await w.runner.tick()
-    assert w.channel.posted[-1] == "[Gator - budget - Budget] Denied."
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Denied."
 
 
 async def test_a_number_picks_that_menu_row(w):
@@ -99,7 +99,7 @@ async def test_a_number_picks_that_menu_row(w):
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "2")
     assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.ENTER))]
-    assert w.channel.posted[-1] == "[Gator - budget - Budget] Got it: Blue."
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Got it: Blue."
 
 
 async def test_typed_words_are_not_typed_into_a_question_and_it_keeps_waiting(w):
@@ -119,7 +119,7 @@ async def test_a_reply_that_is_not_an_answer_to_a_permission_says_what_is_asked_
     await say(w, "sure, go ahead and do it")
     assert w.host.typed == [] and w.host.delivered == [("pty-1", "run the tests")]
     out = w.channel.posted[-1]
-    assert out.startswith("[Gator - budget - Budget] Not sent: this session is waiting on a permission.\nTool: Bash\n")
+    assert out.startswith("[\U0001F40A Gator - budget - Budget] Not sent: this session is waiting on a permission.\nTool: Bash\n")
     assert out.endswith("Next:\n• `allow` to allow once.\n• `deny` to deny.")
     assert len(routed(w)) == 1
     await say(w, "allow")
@@ -141,7 +141,7 @@ async def test_a_draft_cannot_be_answered_from_chat(w):
     await say(w, "run the tests")
     await show(w, "pty-1", {"tool_name": "mcp__outlook__send_email", "tool_input": {"to": "a@example.com"}})
     assert w.channel.posted[-1] == (
-        "[Gator - budget - Budget] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+        "[\U0001F40A Gator - budget - Budget] Needs you: a draft to review.\nOpen AI Gator to review it and send."
     )
     await say(w, "allow")
     assert w.host.typed == []
@@ -155,7 +155,7 @@ async def test_a_prompt_that_changed_before_the_reply_types_nothing_and_says_it_
     w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 9}
     await say(w, "allow")
     assert w.host.typed == []
-    assert w.channel.posted[-1] == f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
+    assert w.channel.posted[-1] == f"[\U0001F40A Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
     assert routed(w) == []
 
 
@@ -196,7 +196,7 @@ async def test_a_named_answer_reaches_only_that_session(w):
     await show(w, "pty-2", ASK_USER_QUESTION)
     await say(w, "other: 2")
     assert w.host.typed == [("pty-2", (prompts.DOWN, prompts.ENTER))]
-    assert w.channel.posted[-1] == "[Gator - other - Other] Got it: Blue."
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - other - Other] Got it: Blue."
     assert [m["session_id"] for m in routed(w)] == [w.service.resolve("budget").id]
     await say(w, "budget: allow")
     assert w.host.typed[-1] == ("pty-1", (prompts.ENTER,))
@@ -233,7 +233,7 @@ async def test_list_names_who_is_waiting_and_offers_the_answer_for_it(w):
     w.clock.now += 3 * MINUTE
     await say(w, "list")
     out = w.channel.posted[-1]
-    assert out.startswith("[Gator] 2 sessions running:\nNeeds you:\n1. budget · waiting ")
+    assert out.startswith("[\U0001F40A Gator] 2 sessions running:\nNeeds you:\n1. budget · waiting ")
     assert "Working:\n2. other" in out
     assert out.endswith("Next:\n• `budget: allow` to allow once.")
 
@@ -268,8 +268,8 @@ async def test_help_while_the_chat_is_open_does_not_reprint_the_greeting(w):
     await opened(w)
     await say(w, "help")
     out = w.channel.posted[-1]
-    assert out.startswith("[Gator] Here is what you can type.\n\nNext:\n")
-    assert "Gator on watch" not in out and commands.CROC not in out
+    assert out.startswith("[\U0001F40A Gator] Here is what you can type.\n\nNext:\n")
+    assert "Gator on watch" not in out and out.count(commands.CROC) == 1
     assert commands.EVERYTHING_GOES_TO_AGENT not in out
     assert "30 minutes" not in out
 
@@ -297,7 +297,7 @@ def test_list_groups_by_state_with_the_longest_wait_first_and_omits_a_repeated_p
         ("notes", "Notes", commands.IDLE, 3600.0, ""),
     ])
     assert out == (
-        "[Gator] 4 sessions running:\n"
+        "[\U0001F40A Gator] 4 sessions running:\n"
         "Needs you:\n"
         "1. api · Services · waiting 10 min\n"
         "2. hub · waiting 1 min\n"
@@ -316,9 +316,9 @@ def test_list_offers_no_next_block_when_nothing_is_waiting():
 
 
 def test_status_leaves_out_last_activity_when_it_is_the_same_minute():
-    same = commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 1010.0)
+    same = commands.session_status("budget", commands.WORKING, 1000.0, 1010.0)
     assert "Last activity" not in same
-    later = commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 5000.0)
+    later = commands.session_status("budget", commands.WORKING, 1000.0, 5000.0)
     assert "Last activity" in later
 
 

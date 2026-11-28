@@ -12,6 +12,7 @@ _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
 PROMPT_MESSAGES_KEEP = 50
+MASTER_KEY = "master"
 
 
 def default_path() -> Path:
@@ -19,6 +20,8 @@ def default_path() -> Path:
 
 
 class State:
+    """One JSON file. A process shares one instance (`shared()`), so the lock covers every writer."""
+
     def __init__(self, path: Path | None = None):
         self._path = path
         self._lock = threading.Lock()
@@ -55,6 +58,40 @@ class State:
             data = self._load()
             self._channel(data, channel)["last_id"] = message_id
             self._save(data)
+
+    def channel_value(self, channel: str, key: str):
+        with self._lock:
+            return (self._load().get(channel) or {}).get(key)
+
+    def set_channel_value(self, channel: str, key: str, value) -> None:
+        with self._lock:
+            data = self._load()
+            self._channel(data, channel)[key] = value
+            self._save(data)
+
+    def master(self) -> dict | None:
+        with self._lock:
+            value = self._load().get(MASTER_KEY)
+        return value if isinstance(value, dict) else None
+
+    def set_master(self, record: dict | None) -> None:
+        with self._lock:
+            data = self._load()
+            if record is None:
+                data.pop(MASTER_KEY, None)
+            else:
+                data[MASTER_KEY] = record
+            self._save(data)
+
+    def mark_master_seen(self, armed_at: float, now: float) -> None:
+        """Records the latest clock reading on the window that was armed at `armed_at`; a window
+        that was closed or replaced in the meantime is left alone."""
+        with self._lock:
+            data = self._load()
+            record = data.get(MASTER_KEY)
+            if isinstance(record, dict) and record.get("armed_at") == armed_at:
+                record["seen"] = now
+                self._save(data)
 
     def disarmed(self, channel: str) -> bool:
         with self._lock:
@@ -136,3 +173,15 @@ class State:
         with self._lock:
             found = (self._load().get(channel) or {}).get("prompt_messages", [])
         return [m for m in found if isinstance(m, dict)]
+
+_shared: State | None = None
+_shared_lock = threading.Lock()
+
+
+def shared() -> State:
+    """The process-wide state: the loops and the routes must write through the same lock."""
+    global _shared
+    with _shared_lock:
+        if _shared is None:
+            _shared = State()
+        return _shared

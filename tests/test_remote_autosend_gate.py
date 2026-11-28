@@ -11,6 +11,7 @@ from relay import settings
 from remote import slack_channel, teams_channel
 from remote.channel import AutosendOff, ChannelRefused
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.slack_channel import SlackSelfDM
@@ -84,7 +85,7 @@ def chat(request, monkeypatch, autosend_gate):
 
 def test_gate_on_posts_to_the_own_chat(tmp_path, chat):
     state = State(tmp_path / "s.json")
-    assert chat.adapter(state).post("[Gator] Online")
+    assert chat.adapter(state).post("[\U0001F40A Gator] Online")
     assert len(chat.posts()) == 1
 
 
@@ -92,7 +93,7 @@ def test_gate_off_posts_nothing_and_records_nothing(tmp_path, chat, autosend_gat
     autosend_gate["on"] = False
     state = State(tmp_path / "s.json")
     with pytest.raises(AutosendOff):
-        chat.adapter(state).post("[Gator] Online")
+        chat.adapter(state).post("[\U0001F40A Gator] Online")
     assert chat.posts() == []
     assert issubclass(AutosendOff, ChannelRefused)
 
@@ -100,7 +101,7 @@ def test_gate_off_posts_nothing_and_records_nothing(tmp_path, chat, autosend_gat
 def test_gate_on_but_not_the_own_chat_posts_nothing(tmp_path, chat):
     state = State(tmp_path / "s.json")
     with pytest.raises(ChannelRefused) as refused:
-        chat.adapter(state, own=False).post("[Gator] hello")
+        chat.adapter(state, own=False).post("[\U0001F40A Gator] hello")
     assert not isinstance(refused.value, AutosendOff)
     assert chat.posts() == []
 
@@ -108,7 +109,7 @@ def test_gate_on_but_not_the_own_chat_posts_nothing(tmp_path, chat):
 def test_gate_off_and_not_the_own_chat_posts_nothing(tmp_path, chat, autosend_gate):
     autosend_gate["on"] = False
     with pytest.raises(ChannelRefused):
-        chat.adapter(State(tmp_path / "s.json"), own=False).post("[Gator] hello")
+        chat.adapter(State(tmp_path / "s.json"), own=False).post("[\U0001F40A Gator] hello")
     assert chat.posts() == []
 
 
@@ -118,6 +119,7 @@ def _runner(chat, tmp_path):
     host = FakeHost()
     service = RemoteService(host, default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(chat.adapter(state), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     return runner, host, clock
 
@@ -165,6 +167,7 @@ async def test_a_reply_to_a_command_is_not_sent_to_a_chat_that_is_not_the_own_ch
     state = State(tmp_path / "s.json")
     service = RemoteService(FakeHost(), default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(chat.adapter(state, own=False), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     await runner.announce_online()
     assert chat.posts() == []
@@ -180,6 +183,7 @@ async def test_the_switch_being_off_is_logged_once_per_arming_period(tmp_path, c
     state = State(tmp_path / "s.json")
     service = RemoteService(FakeHost(), default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(OffChannel(state), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     with caplog.at_level(logging.INFO, logger="remote.runner"):
         for _ in range(3):
@@ -208,13 +212,13 @@ def real_chat(request, monkeypatch, real_settings):
 
 def test_with_the_real_settings_a_fresh_install_posts_nothing(tmp_path, real_chat):
     with pytest.raises(AutosendOff):
-        real_chat.adapter(State(tmp_path / "s.json")).post("[Gator] Online")
+        real_chat.adapter(State(tmp_path / "s.json")).post("[\U0001F40A Gator] Online")
     assert real_chat.posts() == []
 
 
 def test_with_the_real_settings_the_user_switch_turns_posting_on(tmp_path, real_chat):
     settings.set_user_self_chat_autosend(True)
-    real_chat.adapter(State(tmp_path / "s.json")).post("[Gator] Online")
+    real_chat.adapter(State(tmp_path / "s.json")).post("[\U0001F40A Gator] Online")
     assert len(real_chat.posts()) == 1
 
 
@@ -223,5 +227,5 @@ def test_with_the_real_settings_the_admin_policy_beats_the_user_switch(tmp_path,
     pol._reset_cache()
     settings.set_user_self_chat_autosend(True)
     with pytest.raises(AutosendOff):
-        real_chat.adapter(State(tmp_path / "s.json")).post("[Gator] Online")
+        real_chat.adapter(State(tmp_path / "s.json")).post("[\U0001F40A Gator] Online")
     assert real_chat.posts() == []

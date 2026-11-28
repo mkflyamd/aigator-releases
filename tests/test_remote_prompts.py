@@ -53,7 +53,7 @@ def test_the_captured_ask_user_question_is_a_numbered_question():
     assert prompt.question == "Which color do you prefer?"
     assert [(c.label, c.description) for c in prompt.choices] == [("Red", "Choose red"), ("Blue", "Choose blue")]
     assert prompts.waiting_message("budget", "Budget", prompt) == (
-        "[Gator - budget - Budget] Needs you: a question.\n"
+        "[\U0001F40A Gator - budget - Budget] Needs you: a question.\n"
         "Which color do you prefer?\n\n"
         "Next:\n• `1` Red: Choose red\n• `2` Blue: Choose blue"
     )
@@ -63,7 +63,7 @@ def test_a_bash_permission_shows_the_tool_and_command_and_offers_allow_once_and_
     prompt = parsed(BASH_PERMISSION)
     assert prompt.kind == prompts.PERMISSION
     assert prompts.waiting_message("budget", "Budget", prompt) == (
-        "[Gator - budget - Budget] Needs you: permission.\n"
+        "[\U0001F40A Gator - budget - Budget] Needs you: permission.\n"
         "Tool: Bash\nCommand: echo hi > out.txt\n\n"
         "Next:\n• `allow` to allow once.\n• `deny` to deny."
     )
@@ -82,7 +82,7 @@ def test_always_allow_and_dont_ask_again_never_appear_and_cannot_be_typed(payloa
 def test_a_file_tool_shows_its_path_relative_to_the_project():
     prompt = parsed({"tool_name": "Edit", "cwd": CWD, "tool_input": {"file_path": CWD + "\\web\\app.py"}})
     assert prompts.waiting_message("a", "p", prompt).startswith(
-        "[Gator - a - p] Needs you: permission.\nTool: Edit\nPath: web/app.py\n"
+        "[\U0001F40A Gator - a - p] Needs you: permission.\nTool: Edit\nPath: web/app.py\n"
     )
 
 
@@ -131,7 +131,7 @@ def test_a_draft_tool_is_not_answerable_and_points_to_the_app():
         prompt = parsed({"tool_name": tool, "tool_input": {"body": "hello"}})
         assert prompt.kind == prompts.DRAFT and not prompt.answerable
         assert prompts.waiting_message("a", "p", prompt) == (
-            "[Gator - a - p] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+            "[\U0001F40A Gator - a - p] Needs you: a draft to review.\nOpen AI Gator to review it and send."
         )
         assert isinstance(prompts.resolve(prompt, "allow"), prompts.Refused)
         assert isinstance(prompts.resolve(prompt, "1"), prompts.Refused)
@@ -172,7 +172,7 @@ def test_any_other_tool_is_app_only_so_a_chat_allow_cannot_pick_an_unseen_option
 def test_an_app_only_permission_still_shows_what_it_is_and_points_to_the_app():
     prompt = parsed({"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/docs"}})
     assert prompts.waiting_message("a", "p", prompt) == (
-        "[Gator - a - p] Needs you: permission.\n"
+        "[\U0001F40A Gator - a - p] Needs you: permission.\n"
         "Tool: WebFetch\nURL: https://example.com/docs\n\n"
         "Next:\n• Open AI Gator to review and answer this permission."
     )
@@ -294,15 +294,15 @@ def test_anything_else_at_a_permission_is_refused_not_typed(reply):
 def test_a_refused_message_names_what_is_being_asked_and_offers_the_options():
     prompt = parsed(BASH_PERMISSION)
     out = prompts.waiting_message("budget", "Budget", prompt, refused="this session is waiting on a permission.")
-    assert out.startswith("[Gator - budget - Budget] Not sent: this session is waiting on a permission.\nTool: Bash\n")
+    assert out.startswith("[\U0001F40A Gator - budget - Budget] Not sent: this session is waiting on a permission.\nTool: Bash\n")
     assert out.endswith("Next:\n• `allow` to allow once.\n• `deny` to deny.")
 
 
 def test_every_message_carries_the_session_name_and_the_shared_prefix():
     for prompt in (parsed(ASK_USER_QUESTION), parsed(BASH_PERMISSION), parsed({"tool_name": "mcp__a__send_x"})):
         text = prompts.waiting_message("budget", "Budget", prompt)
-        assert text.startswith(commands.SYSTEM_PREFIX + " - budget - Budget]")
-        assert text.count(commands.SYSTEM_PREFIX) == 1
+        assert text.startswith(commands.agent_prefix("budget", "Budget", several=True))
+        assert text.count(commands.CROC) == 1
         assert "!" not in text and "**" not in text
 
 

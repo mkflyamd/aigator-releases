@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from remote.commands import SYSTEM_PREFIX, _tidy, next_block
+from remote.commands import _tidy, agent_prefix, next_block
 
 COMMAND_MAX_CHARS = 150
 PATH_MAX_CHARS = 200
@@ -261,7 +261,7 @@ def _options(prompt: Prompt) -> list[str]:
 
 def label(session: str, project: str) -> str:
     """The long form, with the session, because this message is the one the user replies to."""
-    return f"{SYSTEM_PREFIX} - {session} - {project}]"
+    return agent_prefix(session, project, several=True)
 
 
 def waiting_message(session: str, project: str, prompt: Prompt, *, refused: str = "") -> str:

@@ -1,5 +1,5 @@
 """Teams "Chat with yourself" adapter. Posts only to that one chat, only text that starts
-with "[Gator", so Gator's own replies can never read back as a command."""
+with the crocodile marker, so Gator's own replies can never read back as a command."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend, teams_html
-from remote.commands import SYSTEM_PREFIX
+from remote.commands import is_own_message
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -96,8 +96,8 @@ class TeamsSelfChat:
         if not self.is_own_self_chat():
             _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)
             raise ChannelRefused("not the own self-chat")
-        if not text.lstrip().startswith(SYSTEM_PREFIX):
-            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
+        if not is_own_message(text):
+            raise ChannelRefused("replies must start with the crocodile marker")
         require_autosend()
         content = teams_html(text)
         try:
