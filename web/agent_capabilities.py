@@ -23,6 +23,7 @@ class Capability:
 CAPABILITIES = {
     "claude": Capability(),
     "crush": Capability(session_from_hook=True, hooks_need_version_check=True, live_needs_token=True),
+    "opencode-bare": Capability(session_from_hook=True, hooks_need_version_check=True, live_needs_token=True),
 }
 
 
@@ -36,7 +37,7 @@ def relayable(agent: str | None) -> bool:
     import agent_state
     import generic_agent
 
-    return agent_state.crush_supports_hooks(generic_agent.find_agent_binary(agent))
+    return agent_state.hooks_supported(agent, generic_agent.find_agent_binary(agent))
 
 
 def live_target_ok(agent: str | None, pty_id: str) -> bool:

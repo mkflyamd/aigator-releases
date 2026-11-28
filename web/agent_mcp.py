@@ -175,6 +175,15 @@ def crush_mcp_line() -> str:
     return f'mcp add {SERVER_NAME} --type http --url {url} --header Authorization "Bearer ${TOKEN_ENV}"'
 
 
+def opencode_mcp_server() -> dict:
+    """The OpenCode config entry that gives it the same door; OpenCode reads the token from the environment at launch."""
+    return {
+        "type": "remote",
+        "url": f"http://127.0.0.1:{backend_port()}{MOUNT_PATH}/",
+        "headers": {"Authorization": f"Bearer {{env:{TOKEN_ENV}}}"},
+    }
+
+
 def serves(agent: str, command: list[str] | None) -> bool:
     return relayable(agent) and bool(command) and not agent_state.is_wsl_command(command)
 

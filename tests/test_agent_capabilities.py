@@ -28,6 +28,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(generic_agent, "_linked_sessions", {})
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:/bin/{agent}.exe")
     monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: w["hooks"])
+    monkeypatch.setattr(agent_state, "opencode_supports_plugin", lambda exe: w["hooks"])
     monkeypatch.setattr(terminal, "_list_host_sessions", lambda strict=False: [{"id": i, "meta": m} for i, m in w["live"].items()])
     monkeypatch.setattr(terminal, "_pty_sessions", {})
     monkeypatch.setattr(agent_wake, "title_of", lambda project, agent, session: "Crushy" if agent == "crush" else "Design head")
@@ -62,9 +63,9 @@ def go_live(world, agent="crush", session=SESSION, token=True):
 # --- the table -----------------------------------------------------------------
 
 
-def test_claude_and_crush_are_relayable_and_nothing_else_is(world):
-    assert agent_capabilities.relayable("claude") and agent_capabilities.relayable("crush")
-    assert not any(agent_capabilities.relayable(a) for a in ("codex", "opencode-bare", "terminal", "", None))
+def test_claude_crush_and_opencode_are_relayable_and_nothing_else_is(world):
+    assert all(agent_capabilities.relayable(a) for a in ("claude", "crush", "opencode-bare"))
+    assert not any(agent_capabilities.relayable(a) for a in ("codex", "terminal", "", None))
 
 
 def test_crush_is_only_relayable_when_its_hooks_are_confirmed(world):
@@ -80,8 +81,8 @@ def test_a_running_crush_needs_its_token_but_a_running_claude_does_not(world):
     assert agent_capabilities.live_target_ok("crush", pid)
 
 
-def test_only_crush_learns_its_session_from_a_hook():
-    assert agent_capabilities.session_from_hook("crush")
+def test_only_crush_and_opencode_learn_their_session_from_a_hook():
+    assert agent_capabilities.session_from_hook("crush") and agent_capabilities.session_from_hook("opencode-bare")
     assert not agent_capabilities.session_from_hook("claude")
 
 
@@ -301,3 +302,93 @@ def test_a_token_without_an_agent_is_a_claude_sender(world, monkeypatch):
     monkeypatch.setattr(generic_agent, "linked_session_id", lambda p: "claude-sess")
     sender = asyncio.run(agent_mcp._sender({"pty_id": pid, "project_id": "demo"}))
     assert sender["name"] == "Design head" and sender["session_id"] == "claude-sess"
+
+
+# --- OpenCode ------------------------------------------------------------------
+
+OPENCODE = ["C:/bin/opencode-bare.exe"]
+
+
+def test_a_suspended_opencode_is_a_target_only_when_its_plugin_support_is_confirmed(world):
+    pid = suspend("opencode-bare")
+    assert [(m["pty_id"], m["agent"]) for m in agent_wake.find_targets("crushy", "demo")] == [(pid, "opencode-bare")]
+    world["hooks"] = False
+    assert agent_wake.find_targets("crushy", "demo") == []
+    assert agent_wake.find_by_pty(pid) is None
+
+
+def test_a_running_opencode_needs_its_token_and_a_recorded_session(world):
+    pid = go_live(world, agent="opencode-bare", session=None)
+    assert agent_wake.find_targets(SESSION, "demo") == []
+    record_session(pid)
+    assert [(m["pty_id"], m["agent"]) for m in agent_wake.find_targets(SESSION, "demo")] == [(pid, "opencode-bare")]
+    untokened = go_live(world, agent="opencode-bare", token=False)
+    assert agent_wake.find_by_pty(untokened) is None
+    world["hooks"] = False
+    assert agent_wake.find_by_pty(pid) is None
+
+
+def test_an_opencode_plugin_cannot_claim_the_session_of_another_terminal(world):
+    owner = go_live(world, agent="opencode-bare", session="ses_peer")
+    generic_agent.relink_session("opencode-bare", owner, "ses_peer")
+    thief = go_live(world, agent="opencode-bare", session=None)
+    record_session(thief, "ses_peer")
+    assert "session_id" not in terminal.live_pty_labels()[thief]
+    assert agent_mcp.recorded_session(thief, "opencode-bare") is None
+    suspend("opencode-bare", session="ses_asleep")
+    record_session(thief, "ses_asleep")
+    assert agent_mcp.recorded_session(thief, "opencode-bare") is None
+
+
+def test_the_message_tool_is_served_to_opencode_only_when_plugins_are_confirmed(world):
+    assert agent_mcp.serves("opencode-bare", OPENCODE)
+    assert not agent_mcp.serves("opencode-bare", ["wsl.exe", "--", "opencode"])
+    pid = pty_id()
+    env = agent_mcp.launch_env("opencode-bare", OPENCODE, pid, "demo")
+    assert agent_mcp.caller_for(env[agent_mcp.TOKEN_ENV]) == {"pty_id": pid, "project_id": "demo", "agent": "opencode-bare"}
+    world["hooks"] = False
+    assert agent_mcp.launch_env("opencode-bare", OPENCODE, pty_id(), "demo") == {}
+
+
+def test_the_opencode_server_entry_reads_the_token_from_the_environment(world, monkeypatch):
+    monkeypatch.setattr(agent_mcp, "backend_port", lambda: "8123")
+    assert agent_mcp.opencode_mcp_server() == {
+        "type": "remote",
+        "url": "http://127.0.0.1:8123/agent-mcp/",
+        "headers": {"Authorization": "Bearer {env:GATOR_AGENT_TOKEN}"},
+    }
+
+
+@pytest.fixture
+def opencode_profile(world, monkeypatch, tmp_path):
+    import llm.registry
+
+    profile = {"api_key": "aigator-fake-api-key", "api_key_header": "x-api-key", "anthropic_url": "https://gw"}  # pragma: allowlist secret
+    monkeypatch.setattr(llm.registry, "get_active_profile", lambda: profile)
+    monkeypatch.setattr(llm.registry, "available_models", lambda: ["claude-sonnet"])
+    monkeypatch.setattr(agent_state, "OPENCODE_DIR", tmp_path / "relay-plugin")
+    return world
+
+
+def test_the_opencode_config_loads_the_plugin_and_the_message_tool_when_supported(opencode_profile):
+    config = json.loads(generic_agent.build_opencode_bare_env()["OPENCODE_CONFIG_CONTENT"])
+    assert config["plugins"] == [agent_state.OPENCODE_DIR.as_posix()]
+    assert (agent_state.OPENCODE_DIR / "index.js").read_text(encoding="utf-8") == agent_state._OPENCODE_PLUGIN
+    assert config["mcp"]["servers"]["gator"] == agent_mcp.opencode_mcp_server()
+    assert "provider" in config
+
+
+def test_the_opencode_config_is_unchanged_when_plugins_cannot_be_confirmed(opencode_profile):
+    opencode_profile["hooks"] = False
+    config = json.loads(generic_agent.build_opencode_bare_env()["OPENCODE_CONFIG_CONTENT"])
+    assert "plugins" not in config and "mcp" not in config
+    assert not agent_state.OPENCODE_DIR.exists()
+
+
+def test_opencode_runs_standalone_only_when_plugins_are_confirmed(world, monkeypatch):
+    monkeypatch.setattr(generic_agent, "_which", lambda name: "C:/bin/opencode.exe")
+    assert generic_agent.build_opencode_bare_command("C:/app", "ses_1") == [
+        "C:/bin/opencode.exe", "--standalone", "--session", "ses_1", "C:/app",
+    ]
+    world["hooks"] = False
+    assert generic_agent.build_opencode_bare_command("C:/app") == ["C:/bin/opencode.exe", "C:/app"]
