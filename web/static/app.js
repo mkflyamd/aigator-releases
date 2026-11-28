@@ -19353,8 +19353,8 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       toast.id = 'ota-update-toast';
       toast.style.cssText = [
         'position:fixed',
-        'bottom:20px',
-        'right:calc(var(--dock-w) + 20px)',
+        'bottom:calc(20px + var(--rcp-toast-lift, 0px))',
+        'left:20px',
         'background:var(--surface)',
         'border:1px solid var(--border)',
         'border-radius:8px',

@@ -460,6 +460,25 @@ test('turning on opens the sheet once, then arms with the CSRF header; restart i
   assert.deepStrictEqual(writes, ['/api/remote/disarm', '/api/remote/arm']);
 });
 
+test('the update toast is lifted above the footer card only while the card is on screen', async () => {
+  const doc = makeDocument();
+  rebuildShell(doc, loadTemplate());
+  const props = {};
+  doc.documentElement.style = { setProperty: (k, v) => (props[k] = v) };
+  const env = makeEnv(doc, running(41945));
+  const rp = pill.create(env);
+  rp.start();
+  await settle();
+  const slot = doc.getElementById('remote-pill-slot');
+  slot.offsetHeight = 170;
+  slot.offsetParent = {};
+  rp.paint();
+  assert.strictEqual(props['--rcp-toast-lift'], '170px');
+  slot.offsetParent = null;
+  rp.paint();
+  assert.strictEqual(props['--rcp-toast-lift'], '0px');
+});
+
 test('a refused restart says Remote control is off and shows the reason', async () => {
   const doc = makeDocument();
   rebuildShell(doc, loadTemplate());

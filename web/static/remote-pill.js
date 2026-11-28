@@ -137,7 +137,7 @@
         spoken: quarter ? 'Turns off in ' + leftSpoken(minutes) : leftSpoken(minutes) + ' left',
         minutes,
       };
-      view.sub = quarter ? '' : 'Teams and Slack · ';
+      view.sub = quarter ? '' : 'Teams and Slack';
       if (hour && !quarter) {
         view.note = 'Turns off soon. Restart to keep it on.';
         view.noteWarn = true;
@@ -308,6 +308,7 @@
     let timer = null;
     let sheetOpener = null;
     let lastAnnounce = '';
+    let lastLift = -1;
     const out = { fetches: 0 };
 
     async function call(method, url, body) {
@@ -397,7 +398,18 @@
         : null;
       if (tab && tab.getAttribute('data-state') !== view.eye)
         tab.setAttribute('data-state', view.eye);
+      liftToast(card);
       announce(view);
+    }
+
+    // The OTA toast sits bottom-left; lift it above the footer card while the card is on screen.
+    function liftToast(card) {
+      const style = doc.documentElement && doc.documentElement.style;
+      if (!style || !style.setProperty) return;
+      const lift = card && card.offsetParent !== null ? card.offsetHeight || 0 : 0;
+      if (lastLift === lift) return;
+      lastLift = lift;
+      style.setProperty('--rcp-toast-lift', lift + 'px');
     }
 
     function say(text) {
