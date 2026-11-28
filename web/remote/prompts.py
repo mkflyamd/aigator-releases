@@ -220,9 +220,22 @@ _FOOTER = "Esctocancel"
 _FOOTER_TAIL = re.compile(r"(?:·Tabtoamend|·ctrl\+etoexplain)*")
 
 
-def permission_dialog_showing(tail: str) -> bool:
+_BOXES = re.compile(r"[\s─-╿]+")
+CHUNK_CHARS = 60
+
+
+def _identity(prompt: Prompt) -> str:
+    """The part of a permission that must be on screen for it to be this one: the start of its command, or the name
+    of its file (the dialog may show the path relative to somewhere else)."""
+    shown = prompt.command or prompt.path.replace("\\", "/").rsplit("/", 1)[-1]
+    return _BOXES.sub("", shown.split("[REDACTED]")[0].rstrip(ELLIPSIS))[:CHUNK_CHARS]
+
+
+def permission_dialog_showing(tail: str, prompt: Prompt | None = None) -> bool:
     """True when the newest thing on the terminal (ANSI already stripped) is a permission dialog with a plain
-    "1. Yes" and nothing after its footer. Whitespace is dropped because the terminal paints spaces as cursor moves."""
+    "1. Yes" and nothing after its footer. Whitespace is dropped because the terminal paints spaces as cursor moves.
+    With `prompt`, the tool call shown for that dialog must also be the one the prompt describes: two permissions
+    asked back to back leave the first one's dialog on screen while the hook file already describes the second."""
     flat = re.sub(r"\s+", "", tail)
     start = flat.rfind("Doyouwantto")
     if start < 0:
@@ -231,7 +244,13 @@ def permission_dialog_showing(tail: str) -> bool:
     cut = dialog.rfind(_FOOTER)
     if cut < 0 or "1.Yes" not in dialog[:cut]:
         return False
-    return _FOOTER_TAIL.fullmatch(dialog[cut + len(_FOOTER) :]) is not None
+    if _FOOTER_TAIL.fullmatch(dialog[cut + len(_FOOTER) :]) is None:
+        return False
+    if prompt is None:
+        return True
+    identity = _identity(prompt)
+    call = max(flat.rfind("●", 0, start), 0)
+    return bool(identity) and identity in _BOXES.sub("", flat[call:])
 
 
 def _pick(prompt: Prompt, number: int) -> Answer:

@@ -384,3 +384,22 @@ async def test_an_oversize_prompt_file_is_an_app_only_prompt_that_cannot_be_answ
     message = prompts.waiting_message("a", "p", shown)
     assert "it is too large to show here" in message and prompts.OPEN_APP_QUESTION in message
     assert isinstance(prompts.resolve(shown, "allow"), prompts.Refused)
+
+
+async def test_nothing_is_typed_when_the_dialog_on_screen_is_another_tool_call(typed):
+    _show({**BASH, "tool_input": {"command": "rm -rf build"}})
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == []
+
+
+async def test_the_dialog_of_the_same_tool_call_is_typed_into_even_when_the_command_wraps(typed, screen):
+    long = "pytest tests/test_remote_prompt_flow.py tests/test_remote_session_host.py -k permission -x -q"
+    _show({**BASH, "tool_input": {"command": long}})
+    screen.text = BASH_DIALOG.replace("echo hi", "pytest tests/test_remote_prompt_flow.py\n│ tests/test_remote_session_host.py\n│ -k permission -x -q")
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.ENTER,))
+    assert typed == [(PTY, prompts.ENTER)]

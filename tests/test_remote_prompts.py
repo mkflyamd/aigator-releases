@@ -331,3 +331,29 @@ DIALOG = "Doyouwanttoproceed?\n❯1.Yes\n2.Yes,andalwaysallow\n3.No\n\nEsctocanc
 )
 def test_the_permission_dialog_must_be_the_last_thing_on_screen(tail, showing):
     assert prompts.permission_dialog_showing(tail) is showing
+
+
+def _bash(command):
+    return parsed({"tool_name": "Bash", "cwd": CWD, "tool_input": {"command": command}})
+
+
+def _edit(path):
+    return parsed({"tool_name": "Edit", "cwd": CWD, "tool_input": {"file_path": path}})
+
+
+@pytest.mark.parametrize(
+    "prompt, tail, showing",
+    [
+        (_bash("echo hi"), "● Bash(echo hi) ⎿  Waiting…\n" + DIALOG, True),
+        (_bash("echo hi"), "● Bash(rm -rf build) ⎿  Waiting…\n" + DIALOG, False),
+        (_bash("echo hi"), "● Bash(echo hi)\n● Bash(rm -rf build)\n" + DIALOG, False),
+        (_bash("echo hi"), DIALOG, False),
+        (_bash("echo a && echo b"), "●Bash(echo a &&\n│ echo b)\n" + DIALOG, True),
+        (_edit(CWD + "/src/app.py"), "● Update(src/app.py)\n" + DIALOG, True),
+        (_edit(CWD + "/src/app.py"), "● Update(src/other.py)\n" + DIALOG, False),
+        (_bash("echo [REDACTED]"), "● Bash(echo secret)\n" + DIALOG, True),
+        (_bash("[REDACTED]"), "● Bash(echo secret)\n" + DIALOG, False),
+    ],
+)
+def test_the_dialog_on_screen_must_show_the_tool_call_the_prompt_describes(prompt, tail, showing):
+    assert prompts.permission_dialog_showing(tail, prompt) is showing
