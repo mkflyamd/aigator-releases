@@ -24,6 +24,7 @@ from remote.service import (
     ADOPTED,
     Aborted,
     Asleep,
+    Elsewhere,
     Event,
     PromptGone,
     PromptRefused,
@@ -32,7 +33,7 @@ from remote.service import (
     RemoteService,
     Session,
 )
-from remote.session_host import current_branch
+from remote.session_host import Project, current_branch
 from remote.state import UNROUTED_PREFIX, State
 from remote.window import ChatWindow
 from teams_remote_control import _COMMAND_RE as LEGACY_CODE_RE
@@ -45,6 +46,8 @@ WAITING_HEADLINE = commands.WAITING_HEADLINE
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
 RETRY_POST_SECONDS = 60.0
 PROMPT_HOLD_SECONDS = 2 * 3600.0
+# Why an open terminal cannot be messaged at all, as opposed to not right now: the lane then starts afresh.
+NOT_MESSAGEABLE = frozenset(("opted_out", "unsafe_mode", "unknown_mode", "switched_off", "admin_denied"))
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
@@ -435,7 +438,7 @@ class RemoteRunner:
         except Exception:
             _log.warning("could not audit a refused message to %s", peer_name, exc_info=True)
 
-    async def _message_peer(self, peer: Peer, text: str) -> None:
+    async def _message_peer(self, peer: Peer, text: str, project: Project | None = None) -> None:
         if not text:
             raise Refusal(commands.mention_needs_text(commands.peer_label(peer.name)))
         wait = self._peers.limiter.wait_seconds(peer.session_id)
@@ -446,7 +449,7 @@ class RemoteRunner:
             delivery = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
         except PeerRefused as exc:
             raise Refusal(commands.peer_refused(peer.name, exc.reason)) from exc
-        project = self._service.default_project()
+        project = project or self._service.default_project()
         if project is not None:
             try:
                 self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
@@ -524,6 +527,8 @@ class RemoteRunner:
 
     async def _deliver(self, session: Session, text: str, sent_at: float = 0.0) -> None:
         if await self._service.needs_wake(session):
+            if await self._route_elsewhere(session, text):
+                return
             await self._start_wake(session, text)
             return
         await self._service.refresh(session.id)
@@ -659,6 +664,34 @@ class RemoteRunner:
             await self._post(prompts.more_waiting([(s.short, now - self._since(s)) for s in due.rest]))
         self._summarized = rest
 
+    async def _route_elsewhere(self, session: Session, text: str) -> bool:
+        """A lane whose saved session is open in another terminal is never woken, so the message goes where the
+        session is: typed into that terminal the way a message to any other agent is (only when it is idle,
+        never woken, closed or suspended from here). When that terminal cannot be messaged at all, the stale
+        lane is dropped and a new session takes the message. True when the message was dealt with."""
+        other = await self._service.open_elsewhere(session)
+        if other is None:
+            return False
+        try:
+            peer = await self._peers.by_pty(other) if self._peers is not None else None
+        except Exception as exc:
+            _log.warning("Remote control could not look up the terminal that holds %s: %s", session.short, exc)
+            peer = None
+        if peer is not None:
+            try:
+                await self._message_peer(peer, text, session.project)
+                return True
+            except Refusal as exc:
+                cause = exc.__cause__
+                if not (isinstance(cause, PeerRefused) and cause.code in NOT_MESSAGEABLE):
+                    raise
+        await self._service.replace_lane(session)
+        prompt = f"{text}\n\n{self._hint}" if self._hint else text
+        fresh = await self._service.start(session.project, prompt)
+        self._begin(fresh)
+        await self._post(self._lane_copy(commands.lane_moved_on, fresh))
+        return True
+
     async def _start_wake(self, session: Session, text: str) -> None:
         """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
         must keep running. begin_wake refuses a second wake of the same lane and one too soon after
@@ -675,6 +708,8 @@ class RemoteRunner:
             await self._service.wake(session, text, proceed=lambda: self._guard.armed)
         except Aborted:
             return
+        except Elsewhere:
+            await self._after_elsewhere(session, text)
         except RemoteError as exc:
             if session.stopping:
                 return
@@ -686,6 +721,21 @@ class RemoteRunner:
             await self._post(self._lane_copy(commands.wake_failed, session))
         else:
             self._begin(session)
+
+    async def _after_elsewhere(self, session: Session, text: str) -> None:
+        """The session was opened in another terminal while it was waking: the same routing as before the wake."""
+        if session.stopping:
+            return
+        try:
+            if await self._route_elsewhere(session, text):
+                return
+        except Refusal as exc:
+            await self._post(str(exc))
+            return
+        except RemoteError as exc:
+            await self._post(self._lane_copy(commands.send_failed, session, str(exc)))
+            return
+        await self._post(self._lane_copy(commands.wake_failed, session, "The session changed while it was waking."))
 
     def _begin(self, session: Session) -> None:
         now = self._clock()

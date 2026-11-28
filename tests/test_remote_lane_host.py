@@ -203,6 +203,56 @@ async def test_a_session_linked_to_a_running_local_terminal_is_never_resumed_a_s
     assert calls.resumed == []
 
 
+async def test_the_wake_guard_raises_the_open_elsewhere_type_so_the_runner_can_route(calls):
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
+    with pytest.raises(session_host.OpenElsewhere):
+        await wake(calls, "pty-1", PROJECT, LABELS)
+
+
+async def test_the_holder_of_the_saved_session_is_named_before_any_wake(calls):
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") == "pty-7"
+    assert calls.resumed == []
+
+
+async def test_a_local_terminal_linked_to_the_saved_session_is_named_as_its_holder(calls):
+    calls.ptys["pty-7"] = FakePty()
+    calls.other_ptys = ["pty-7"]
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") == "pty-7"
+
+
+async def test_a_session_nobody_else_holds_has_no_holder(calls):
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+    calls.ptys["pty-7"] = FakePty(done=True)
+    calls.other_ptys = ["pty-7"]
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+
+
+async def test_the_lane_is_never_its_own_holder(calls):
+    calls.live_labels = {"pty-1": {"agent": "claude", "session_id": "vendor-1"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+
+
+async def test_a_lane_with_no_saved_session_has_no_holder(calls):
+    calls.record = None
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, None) is None
+
+
+async def test_the_lane_id_is_used_when_the_suspend_record_is_gone(calls):
+    calls.record = None
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-9"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-9") == "pty-7"
+
+
+async def test_a_terminal_host_that_does_not_answer_is_an_error_never_nobody(calls, monkeypatch):
+    def down(strict=False):
+        raise pty_client.HostError("down")
+
+    monkeypatch.setattr(terminal, "live_pty_labels", down)
+    with pytest.raises(HostError, match="did not answer"):
+        await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1")
+
+
 async def test_a_finished_local_terminal_does_not_block_the_wake(calls):
     calls.ptys["pty-7"] = FakePty(done=True)
     calls.other_ptys = ["pty-7"]

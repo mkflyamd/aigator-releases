@@ -61,6 +61,10 @@ class StalePrompt(HostError):
     """The prompt being answered is gone or has changed, so nothing was typed."""
 
 
+class OpenElsewhere(HostError):
+    """The lane's saved session is running in another terminal, so it is never woken a second time."""
+
+
 @dataclass(frozen=True)
 class Project:
     id: str
@@ -108,6 +112,7 @@ class SessionHost(Protocol):
     async def alive(self, pty_id: str) -> bool: ...
     async def sleeping(self, pty_id: str) -> bool: ...
     async def saved(self, project: Project, vendor_session_id: str | None) -> bool: ...
+    async def open_elsewhere(self, pty_id: str, project: Project, vendor_session_id: str | None) -> str | None: ...
     async def wake(
         self,
         pty_id: str,
@@ -257,6 +262,20 @@ class LocalPtyHost:
             return False
         return found is not None
 
+    async def open_elsewhere(self, pty_id: str, project: Project, vendor_session_id: str | None) -> str | None:
+        """The terminal other than this lane's that is running the lane's saved session, or None. A host
+        that does not answer raises HostError: "could not ask" is never taken for "nobody has it"."""
+        import agent_suspend
+
+        record = await asyncio.to_thread(agent_suspend.suspended_record, pty_id) or {}
+        session_id = record.get("session_id") or vendor_session_id
+        if not session_id:
+            return None
+        try:
+            return await asyncio.to_thread(self._open_elsewhere, pty_id, record.get("agent") or project.agent, session_id)
+        except pty_client.HostError as exc:
+            raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
+
     async def wake(
         self,
         pty_id: str,
@@ -322,7 +341,7 @@ class LocalPtyHost:
             except pty_client.HostError as exc:
                 raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
             if elsewhere:
-                raise HostError(OPEN_ELSEWHERE_MESSAGE)
+                raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
             if cancelled():
                 raise HostError(WAKE_CANCELLED_MESSAGE)
 
@@ -340,7 +359,7 @@ class LocalPtyHost:
             await asyncio.to_thread(self._close_again, pty_id)
             raise HostError("The session could not be woken.") from exc
         if result["pty_session_id"] != pty_id:
-            raise HostError(OPEN_ELSEWHERE_MESSAGE)
+            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
         try:
             await self._wait_awake(pty_id, cancelled)
         except BaseException:
@@ -351,21 +370,21 @@ class LocalPtyHost:
         await asyncio.to_thread(agent_suspend.forget, pty_id)
 
     @staticmethod
-    def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> bool:
-        """True when a terminal other than this lane's holds the session: the user resumed it in
-        the Code tab. Two processes must never share one stored session. Raises pty_client.HostError
+    def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> str | None:
+        """The terminal other than this lane's that holds the session: the user resumed it in the
+        Code tab. Two processes must never share one stored session. Raises pty_client.HostError
         when the terminal host cannot be asked."""
         import generic_agent
         from routes import terminal
 
         for live_id, meta in terminal.live_pty_labels(strict=True).items():
             if live_id != pty_id and meta.get("agent") == agent and meta.get("session_id") == session_id:
-                return True
+                return live_id
         for other in generic_agent.ptys_for_session(agent, session_id):
             entry = terminal.get_pty_session(other)
             if other != pty_id and entry is not None and not entry.done:
-                return True
-        return False
+                return other
+        return None
 
     async def _wait_awake(self, pty_id: str, cancelled: Callable[[], bool] = lambda: False) -> None:
         """Waits for the resumed session to take input. A large old session makes Claude ask how to

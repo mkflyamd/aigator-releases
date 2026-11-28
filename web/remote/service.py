@@ -19,7 +19,7 @@ from typing import Awaitable, Callable
 
 from remote import commands, prompts
 from remote.guard import limit
-from remote.session_host import HostError, Project, RestoredSession, SessionHost, StalePrompt
+from remote.session_host import HostError, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -48,6 +48,10 @@ class Refusal(RemoteError):
 
 class Asleep(RemoteError):
     """The lane was asleep when the message reached it: wake it, then send."""
+
+
+class Elsewhere(RemoteError):
+    """The lane's saved session is running in another terminal, so it cannot be woken."""
 
 
 class Aborted(RemoteError):
@@ -451,6 +455,25 @@ class RemoteService:
             self._persist(session)
         return session.state != LIVE
 
+    async def open_elsewhere(self, session: Session) -> str | None:
+        """The terminal that is running this lane's saved session in its place, asked before a wake is
+        started so the message goes where the session is. None for a lane that is waking, stopping or failed."""
+        if session.waking or session.stopping or session.state == FAILED:
+            return None
+        try:
+            return await self._host.open_elsewhere(session.pty_id, session.project, session.vendor_session_id)
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
+
+    async def replace_lane(self, session: Session) -> None:
+        """Drops a lane whose saved session someone else is running. Only the lane's own record goes: the
+        session on disk and the terminal that holds it are left alone."""
+        try:
+            await self._host.kill(session.pty_id)
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
+        self._forget(session)
+
     def begin_wake(self, session: Session) -> None:
         """Claims the lane for one wake, or refuses. Synchronous, so two messages in a row cannot
         both start one: the second finds `waking` set."""
@@ -498,6 +521,8 @@ class RemoteService:
             except HostError as exc:
                 if cancelled():
                     raise Aborted(session.short) from exc
+                if isinstance(exc, OpenElsewhere):
+                    raise Elsewhere(str(exc)) from exc
                 if exc.permanent:
                     session.state, session.failure = FAILED, str(exc)
                     self._persist(session)

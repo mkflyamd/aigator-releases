@@ -6,7 +6,7 @@ from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import PROMPT_GRACE_SECONDS, RemoteService
-from remote.session_host import HostError, HostSession, Project, StalePrompt
+from remote.session_host import OPEN_ELSEWHERE_MESSAGE, HostError, HostSession, OpenElsewhere, Project, StalePrompt
 from remote.state import State
 
 
@@ -39,6 +39,7 @@ class FakeHost:
         self.woke_with = []
         self.unreachable = False
         self.suspend_on_deliver = False
+        self.elsewhere = {}
 
     async def spawn(self, project, labels=None):
         self.spawn_labels.append(labels)
@@ -80,11 +81,18 @@ class FakeHost:
     async def saved(self, project, vendor_session_id):
         return vendor_session_id in self.saved_ids
 
+    async def open_elsewhere(self, pty_id, project, vendor_session_id):
+        if self.unreachable:
+            raise HostError("The terminal host did not answer.")
+        return self.elsewhere.get(pty_id)
+
     async def wake(self, pty_id, project, labels, vendor_session_id=None, cancelled=lambda: False):
         self.woken.append((pty_id, project.id, labels))
         self.woke_with.append((vendor_session_id, cancelled))
         if self.wake_gate is not None:
             await self.wake_gate.wait()
+        if pty_id in self.elsewhere:
+            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
         if self.wake_error is not None:
             raise self.wake_error
         self.sleeping_ids.discard(pty_id)

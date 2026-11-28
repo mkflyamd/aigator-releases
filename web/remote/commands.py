@@ -525,6 +525,17 @@ def wake_failed(
     return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
 
 
+def lane_moved_on(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """The lane's saved session is open in another terminal and cannot take the message, so a new session did."""
+    return agent_reply(
+        session,
+        "Started a new session for this. The saved one is open in another terminal on this computer, so it was left alone.",
+        ["Reply here to keep going in the new session."],
+        project=project,
+        several=several,
+    )
+
+
 def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
     """A message that arrives while the wake is under way. It is not queued."""
     return agent_reply(
