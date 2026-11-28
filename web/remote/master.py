@@ -61,6 +61,13 @@ class Master:
         """Starts a window unless one is running; a running window is never extended."""
         if self.active():
             return self.record()
+        return self._open()
+
+    def restart(self) -> dict:
+        """Replaces the window with a fresh 12 hours in one write, so it is never off in between."""
+        return self._open()
+
+    def _open(self) -> dict:
         now = self._clock()
         record = {"armed_at": now, "deadline": now + ARM_SECONDS}
         self._state.set_master(record)
