@@ -119,7 +119,7 @@ async def test_a_session_that_will_not_stop_is_retried_and_no_notice_is_sent_unt
     assert w.channel.posted == [TIMED_OUT]
 
 
-async def test_nothing_is_posted_or_run_after_the_deadline(w):
+async def test_after_the_deadline_nothing_runs_and_a_command_is_told_so_once(w):
     await started(w)
     w.clock.now += 12 * HOUR + 1
     await w.runner.tick()
@@ -128,7 +128,7 @@ async def test_nothing_is_posted_or_run_after_the_deadline(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now}
     await w.runner.tick()
     assert w.host.delivered == [("pty-1", "job 0")]
-    assert w.channel.posted == posted
+    assert w.channel.posted == posted + [commands.timed_out_reply(ARM_SECONDS)]
 
 
 async def test_the_notice_is_not_repeated_after_a_backend_restart(w):

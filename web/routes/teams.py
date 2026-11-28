@@ -272,6 +272,12 @@ def _skype_send_body(content: str, messagetype: str, imdisplayname: str = "") ->
     return body
 
 
+def _skype_sent_id(result: dict) -> str:
+    """The id of a message just sent. The chatsvc POST answers `{"OriginalArrivalTime": <ms>}` and
+    no `id`; that arrival time is the `id` the message carries when the chat is read back."""
+    return str(result.get("id") or result.get("OriginalArrivalTime") or "")
+
+
 def _get_my_mri() -> str:
     """Return the current user's Skype MRI (8:orgid:{aad-oid}).
 
@@ -3236,7 +3242,7 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
 
         result = resp.json() if resp.text else {}
         print(
-            f"[teams-send] sent to {chat_id[:40]} via Skype API, id={result.get('id', '?')}",
+            f"[teams-send] sent to {chat_id[:40]} via Skype API, id={_skype_sent_id(result) or '?'}",
             flush=True,
         )
         # Your own message reorders/updates the chat list — drop the cached list so
@@ -3244,7 +3250,7 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
         _invalidate_chats_cache()
         return {
             "ok": True,
-            "message_id": result.get("id", ""),
+            "message_id": _skype_sent_id(result),
             "created_at": result.get("composetime", ""),
             # Final HTML actually sent — has the real ASM image URLs (not the data:
             # URIs the editor pasted). The optimistic bubble stores this so a later
@@ -3816,7 +3822,7 @@ def tp_teams_new_chat(req: TeamsNewChatRequest):
             f"[teams-new] Sent message to {chat_id[:40]} id={result.get('id', '?')}",
             flush=True,
         )
-        return {"ok": True, "chat_id": chat_id, "message_id": result.get("id", "")}
+        return {"ok": True, "chat_id": chat_id, "message_id": _skype_sent_id(result)}
     except HTTPException:
         raise
     except Exception as e:
@@ -3963,7 +3969,7 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
             return {
                 "sent": True,
                 "chat_id": req.chat_id,
-                "message_id": result.get("id", ""),
+                "message_id": _skype_sent_id(result),
             }
 
         # Slow path: no chat_id — resolve recipients and find/create chat via tp_teams_new_chat

@@ -793,3 +793,16 @@ async def test_nothing_is_said_after_the_window_ran_out_or_for_a_stale_command(t
     fresh.build()
     await fresh.feed(fresh.msg(1, "@gator hi", age=3600))
     assert fresh.channel.posted == []
+
+
+async def test_a_command_after_the_12_hour_window_ran_out_is_told_it_timed_out_once(tmp_path):
+    w = World(tmp_path)
+    w.clock.now += 12 * 3600 + 1
+    await w.runner.tick()
+    posted = len(w.channel.posted)
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator hi"))
+    assert w.channel.posted[posted:] == [commands.timed_out_reply(12 * 3600)]
+    assert "Remote control timed out after 12 hours." in commands.timed_out_reply(12 * 3600)
+    assert commands.not_armed() not in w.channel.posted
+    assert w.host.spawn_labels == []
