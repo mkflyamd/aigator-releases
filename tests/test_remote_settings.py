@@ -113,6 +113,8 @@ def test_the_limits_come_from_config_and_fall_back_to_the_defaults(monkeypatch):
     assert (settings.idle_seconds(), settings.stale_seconds(), settings.armed_max_seconds()) == (7200, 300, 5400)
     cfg.update(remote_session_idle_hours="x", remote_stale_minutes=0, remote_armed_max_hours=True, remote_peer_messages_per_hour=-3)
     assert settings.peer_messages_per_hour() == 30
+    cfg.update(remote_peer_messages_per_hour=0.5)
+    assert settings.peer_messages_per_hour() == 30
     assert (settings.idle_seconds(), settings.stale_seconds(), settings.armed_max_seconds()) == (8 * 3600, 15 * 60, 24 * 3600)
 
 

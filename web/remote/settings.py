@@ -23,6 +23,8 @@ def _number(key: str) -> float:
     value = load_config().get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
         return default
+    if key in COUNT_KEYS and value != int(value):
+        return default
     return float(value)
 
 
