@@ -1,17 +1,17 @@
 """A waiting session reaches chat after a wait when it was started in AI Gator, at most three at a time, and a
 reply to one prompt message answers that prompt and no other."""
 
+import pytest
+
 import agent_handoff
 import agent_state
-import pytest
 from remote import commands, prompts
 from remote.channel import InboundMessage
 from remote.service import Session
-from remote.session_host import LocalPtyHost
 from remote.state import State
+from remote.session_host import LocalPtyHost
 from routes import terminal
-
-from tests.test_remote_chat_window import opened, say
+from tests.test_remote_chat_window import MINUTE, opened, say
 from tests.test_remote_prompt_flow import routed, show
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
 from tests.test_remote_runner import BUDGET, World
@@ -38,18 +38,14 @@ async def several(w, count):
 
 def quoted(w, message_id, text, age=0.0):
     w.seq = getattr(w, "seq", 500) + 1
-    return InboundMessage(
-        id=str(w.seq), text=text, created_at=w.clock.now - age, reply_to=message_id
-    )
+    return InboundMessage(id=str(w.seq), text=text, created_at=w.clock.now - age, reply_to=message_id)
 
 
 async def quote_reply(w, message_id, text):
     await w.runner.process([quoted(w, message_id, text)])
 
 
-async def test_a_session_started_in_the_app_is_not_posted_until_it_has_waited_two_minutes(
-    w,
-):
+async def test_a_session_started_in_the_app_is_not_posted_until_it_has_waited_two_minutes(w):
     await opened(w)
     await app_session(w)
     w.channel.posted.clear()
@@ -61,9 +57,7 @@ async def test_a_session_started_in_the_app_is_not_posted_until_it_has_waited_tw
     w.clock.now += 20
     await w.runner.tick()
     [text] = w.channel.posted
-    assert text.startswith(
-        "[🐊 Gator - budget - Budget] Needs you: permission, waiting 2 min.\n"
-    )
+    assert text.startswith("[🐊 Gator - budget - Budget] Needs you: permission, waiting 2 min.\n")
     assert len(routed(w)) == 1
     await w.runner.tick()
     assert len(w.channel.posted) == 1
@@ -128,9 +122,7 @@ async def test_a_quote_reply_answers_the_quoted_session_even_when_the_chat_is_cl
     await w.service.start(BUDGET, "second")
     await show(w, "pty-1", BASH_PERMISSION)
     await show(w, "pty-2", ASK_USER_QUESTION)
-    second = next(
-        m for m in routed(w) if m["session_id"] == w.service.resolve("budget-2").id
-    )
+    second = next(m for m in routed(w) if m["session_id"] == w.service.resolve("budget-2").id)
     w.runner._window.close()
     await quote_reply(w, second["message_id"], "2")
     assert w.host.typed == [("pty-2", (prompts.DOWN, prompts.ENTER))]
@@ -144,16 +136,12 @@ async def test_a_quote_reply_to_the_other_session_does_not_answer_the_first(w):
     await w.service.start(BUDGET, "second")
     await show(w, "pty-1", BASH_PERMISSION)
     await show(w, "pty-2", BASH_PERMISSION)
-    first = next(
-        m for m in routed(w) if m["session_id"] == w.service.resolve("budget").id
-    )
+    first = next(m for m in routed(w) if m["session_id"] == w.service.resolve("budget").id)
     await quote_reply(w, first["message_id"], "deny")
     assert w.host.typed == [("pty-1", (prompts.ESCAPE,))]
 
 
-async def test_a_late_quote_reply_to_an_answered_prompt_types_nothing_and_does_not_answer_the_next_one(
-    w,
-):
+async def test_a_late_quote_reply_to_an_answered_prompt_types_nothing_and_does_not_answer_the_next_one(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
@@ -164,9 +152,7 @@ async def test_a_late_quote_reply_to_an_answered_prompt_types_nothing_and_does_n
     w.channel.posted.clear()
     await quote_reply(w, old, "allow")
     assert w.host.typed == []
-    assert w.channel.posted == [
-        f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
-    ]
+    assert w.channel.posted == [f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
     assert len(routed(w)) == 1
 
 
@@ -180,9 +166,7 @@ async def test_a_quote_reply_to_a_prompt_answered_in_the_app_says_so(w):
     w.channel.posted.clear()
     await quote_reply(w, posted, "allow")
     assert w.host.typed == []
-    assert w.channel.posted == [
-        f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
-    ]
+    assert w.channel.posted == [f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
 
 
 async def test_a_quote_reply_to_a_message_gator_never_posted_is_an_ordinary_message(w):
@@ -194,9 +178,7 @@ async def test_a_quote_reply_to_a_message_gator_never_posted_is_an_ordinary_mess
     assert w.host.typed == []
 
 
-async def test_a_quote_reply_that_is_not_an_answer_is_refused_and_the_prompt_still_waits(
-    w,
-):
+async def test_a_quote_reply_that_is_not_an_answer_is_refused_and_the_prompt_still_waits(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
@@ -244,15 +226,10 @@ async def test_replies_the_channel_lists_apart_are_answered_in_order_and_once(w)
     assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.ENTER))]
     await w.runner.process_replies([quoted(w, posted, "1")])
     assert len(w.host.typed) == 1
-    assert (
-        w.channel.posted[-1]
-        == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
-    )
+    assert w.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
 
 
-async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting_session(
-    w,
-):
+async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting_session(w):
     await several(w, 4)
     for n in range(1, 5):
         await show(w, f"pty-{n}", BASH_PERMISSION, at=n)
@@ -278,9 +255,7 @@ async def test_a_post_that_failed_holds_no_place_and_is_tried_again_after_a_minu
     assert len(routed(w)) == 3
 
 
-async def test_a_quote_reply_goes_through_the_stale_screen_check_before_anything_is_typed(
-    w,
-):
+async def test_a_quote_reply_goes_through_the_stale_screen_check_before_anything_is_typed(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
@@ -288,23 +263,13 @@ async def test_a_quote_reply_goes_through_the_stale_screen_check_before_anything
     w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 9}
     await quote_reply(w, posted, "allow")
     assert w.host.typed == []
-    assert (
-        w.channel.posted[-1]
-        == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
-    )
+    assert w.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
 
 
 async def test_a_quote_reply_to_a_draft_is_refused_and_types_nothing(w):
     await opened(w)
     await say(w, "run the tests")
-    await show(
-        w,
-        "pty-1",
-        {
-            "tool_name": "mcp__outlook__send_email",
-            "tool_input": {"to": "a@example.com"},
-        },
-    )
+    await show(w, "pty-1", {"tool_name": "mcp__outlook__send_email", "tool_input": {"to": "a@example.com"}})
     await quote_reply(w, routed(w)[0]["message_id"], "allow")
     assert w.host.typed == []
     assert "Not sent: this one has to be answered in AI Gator." in w.channel.posted[-1]
@@ -313,9 +278,7 @@ async def test_a_quote_reply_to_a_draft_is_refused_and_types_nothing(w):
 async def test_a_quote_reply_to_a_long_command_only_accepts_deny(w):
     await opened(w)
     await say(w, "run the tests")
-    await show(
-        w, "pty-1", {**BASH_PERMISSION, "tool_input": {"command": "echo " + "x" * 400}}
-    )
+    await show(w, "pty-1", {**BASH_PERMISSION, "tool_input": {"command": "echo " + "x" * 400}})
     posted = routed(w)[0]["message_id"]
     await quote_reply(w, posted, "allow")
     assert w.host.typed == []
@@ -334,21 +297,13 @@ def real(w, tmp_path, monkeypatch):
     keys = []
     monkeypatch.setattr(terminal, "get_pty_session", lambda pty: screen)
     monkeypatch.setattr(terminal, "is_pty_alive", lambda pty: True)
-    monkeypatch.setattr(
-        terminal, "write_pty_session", lambda pty, key: keys.append(key) or True
-    )
+    monkeypatch.setattr(terminal, "write_pty_session", lambda pty, key: keys.append(key) or True)
     w.host = LocalPtyHost()
     w.build()
     now = w.clock.now
     session = Session(
-        id=f"pty:{PTY}",
-        pty_id=PTY,
-        project=BUDGET,
-        short="budget",
-        vendor_session_id=None,
-        created_at=now,
-        last_activity=now,
-        awaiting_since=now,
+        id=f"pty:{PTY}", pty_id=PTY, project=BUDGET, short="budget", vendor_session_id=None,
+        created_at=now, last_activity=now, awaiting_since=now,
     )
     w.service._sessions[session.id] = session
     w.screen, w.keys = screen, keys
@@ -363,41 +318,24 @@ async def real_prompt(w, payload):
 
 
 async def test_a_quote_reply_allow_is_typed_when_the_real_checks_pass(real):
-    posted = await real_prompt(
-        real,
-        {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}},
-    )
+    posted = await real_prompt(real, {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}})
     await quote_reply(real, posted, "allow")
     assert real.keys == [prompts.ENTER]
 
 
-async def test_a_quote_reply_types_nothing_when_the_user_typed_at_the_terminal_after_the_prompt(
-    real,
-):
-    posted = await real_prompt(
-        real,
-        {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}},
-    )
+async def test_a_quote_reply_types_nothing_when_the_user_typed_at_the_terminal_after_the_prompt(real):
+    posted = await real_prompt(real, {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}})
     real.screen.last_user_input = real.service.list()[0].prompt.at + 1
     await quote_reply(real, posted, "allow")
     assert real.keys == []
-    assert (
-        real.channel.posted[-1]
-        == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
-    )
+    assert real.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
 
 
-async def test_a_quote_reply_allow_for_a_tool_outside_bash_edit_and_write_is_refused(
-    real,
-):
-    posted = await real_prompt(
-        real, {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}}
-    )
+async def test_a_quote_reply_allow_for_a_tool_outside_bash_edit_and_write_is_refused(real):
+    posted = await real_prompt(real, {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}})
     await quote_reply(real, posted, "allow")
     assert real.keys == []
-    assert (
-        "Not sent: this one has to be answered in AI Gator." in real.channel.posted[-1]
-    )
+    assert "Not sent: this one has to be answered in AI Gator." in real.channel.posted[-1]
     assert "`allow`" not in real.channel.posted[-1]
 
 
