@@ -177,6 +177,9 @@ class RemoteRunner:
         text = message.text.strip()
         if not text or LEGACY_CODE_RE.match(message.text):
             return None
+        mention = commands.LEADING_MENTION_RE.match(text)
+        if mention and mention.group(1).lower() not in _TAGS and self._service.resolve(mention.group(1)) is None:
+            return None
         if message.attachments:
             await self._note_not_sent(message, "attachment", commands.attachment_not_sent)
             return None

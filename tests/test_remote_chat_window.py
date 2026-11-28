@@ -125,6 +125,20 @@ async def test_an_untagged_message_runs_inside_the_window(w):
     assert w.channel.posted == [commands.greeting()]
 
 
+async def test_an_untagged_mention_of_another_name_is_not_for_gator_and_gets_no_reply(w):
+    await opened(w)
+    await say(w, "@remote control I can't see the options")
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting()]
+
+
+async def test_an_untagged_mention_of_a_session_still_routes_to_it(w):
+    await opened(w)
+    await w.service.start(OTHER, "b")
+    await say(w, "@other say ok")
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
+
+
 async def test_an_untagged_message_is_ignored_when_no_window_is_open(w):
     await baselined(w)
     await say(w, "run the tests")
