@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -220,9 +221,19 @@ def chat_closed_bye() -> str:
     return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."])
 
 
-def timed_out(seconds: float) -> str:
+def _left_behind(asleep: Sequence[str], waiting: Sequence[str]) -> str:
+    """What the stop ended that someone might still have been counting on."""
+    parts = []
+    if asleep:
+        parts.append(f" Asleep, so their saved sessions are gone: {', '.join(asleep)}.")
+    if waiting:
+        parts.append(f" Still waiting for an answer, now unanswered: {', '.join(waiting)}.")
+    return "".join(parts)
+
+
+def timed_out(seconds: float, *, asleep: Sequence[str] = (), waiting: Sequence[str] = ()) -> str:
     return system_reply(
-        f"Remote control turned itself off after {in_words(seconds)}.",
+        f"Remote control turned itself off after {in_words(seconds)}.{_left_behind(asleep, waiting)}",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
@@ -304,9 +315,9 @@ def error_reply(text: str) -> str:
     return system_reply(text, ["`help` to see what you can do."])
 
 
-def stopped(count: int) -> str:
+def stopped(count: int, *, asleep: Sequence[str] = (), waiting: Sequence[str] = ()) -> str:
     return system_reply(
-        f"Stopped {count} session{'' if count == 1 else 's'}. Remote control is off.",
+        f"Stopped {count} session{'' if count == 1 else 's'}. Remote control is off.{_left_behind(asleep, waiting)}",
         ["Open AI Gator and turn Remote control on again."],
     )
 
@@ -614,12 +625,15 @@ def wake_failed(
     return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
 
 
-def lane_moved_on(session: str, *, project: str | None = None, several: bool = False) -> str:
-    """The lane's saved session is open in another terminal and cannot take the message, so a new session did."""
+LANE_ELSEWHERE_REASON = "This session is open in another terminal on this computer."
+
+
+def lane_opened_elsewhere(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """The lane's saved session is open in another terminal that cannot take the message from here."""
     return agent_reply(
         session,
-        "Started a new session for this. The saved one is open in another terminal on this computer, so it was left alone.",
-        ["Reply here to keep going in the new session."],
+        f"{LANE_ELSEWHERE_REASON} Your message was not sent, and the session was not woken.",
+        [f"Message it in that terminal, or `stop {session}` to forget this lane."],
         project=project,
         several=several,
     )

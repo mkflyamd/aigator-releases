@@ -327,3 +327,11 @@ def test_a_trailing_question_is_detected(question, asks):
 )
 def test_own_messages_are_matched_by_shape(text, own):
     assert commands.is_own_message(text) is own
+
+
+def test_the_stop_notices_list_what_was_asleep_and_what_was_waiting_for_an_answer():
+    text = commands.stopped(3, asleep=["a", "b"], waiting=["c"])
+    assert "Asleep, so their saved sessions are gone: a, b." in text
+    assert "Still waiting for an answer, now unanswered: c." in text
+    assert commands.timed_out(3600, waiting=["c"]).count("c.") == 1
+    assert commands.stopped(1) == commands.stopped(1, asleep=[], waiting=[])

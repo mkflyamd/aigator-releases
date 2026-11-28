@@ -271,9 +271,14 @@ class RemoteService:
             keep = next((r for r in found if r.pty_id == lane.get("pty_id")), found[-1])
             if lane and lane["pty_id"] != keep.pty_id:
                 old = self._session_from_lane(lane, now)
-                if await self._host.sleeping(old.pty_id) or await self._host.saved(old.project, old.vendor_session_id):
-                    # Something is saved for the stored lane. A newer terminal must not cost the user
-                    # that: the lane is kept, marked failed, and `stop` is what clears it.
+                if (
+                    await self._host.alive(old.pty_id)
+                    or await self._host.sleeping(old.pty_id)
+                    or await self._host.saved(old.project, old.vendor_session_id)
+                ):
+                    # A terminal is still running or something is saved for the stored lane. A newer
+                    # terminal must not cost the user that: the lane is kept, marked failed, and `stop`
+                    # is what clears it. Only a dead terminal is killed.
                     _log.warning(
                         "remote lane %s for %s has a saved session; the newer terminal %s is left alone",
                         lane["short"], project_id, keep.pty_id,
@@ -485,14 +490,11 @@ class RemoteService:
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
 
-    async def replace_lane(self, session: Session) -> None:
-        """Drops a lane whose saved session someone else is running. Only the lane's own record goes: the
-        session on disk and the terminal that holds it are left alone."""
-        try:
-            await self._host.kill(session.pty_id)
-        except HostError as exc:
-            raise RemoteError(str(exc)) from exc
-        self._forget(session)
+    def mark_opened_elsewhere(self, session: Session) -> None:
+        """Keeps a lane whose saved session someone else is running, marked failed. Nothing is killed or
+        dropped: the terminal that holds the session is not this lane's, and `stop` is what clears the lane."""
+        session.state, session.failure = FAILED, commands.LANE_ELSEWHERE_REASON
+        self._persist(session)
 
     def begin_wake(self, session: Session) -> None:
         """Claims the lane for one wake, or refuses. Synchronous, so two messages in a row cannot

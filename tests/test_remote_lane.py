@@ -619,27 +619,52 @@ async def test_an_open_terminal_waiting_on_a_prompt_is_told_so(pw):
     assert pw.host.woken == [] and pw.host.n == 1
 
 
-async def test_an_open_terminal_that_cannot_be_messaged_hands_the_message_to_a_fresh_lane_session(pw):
+async def test_an_open_terminal_that_cannot_be_messaged_keeps_the_lane_and_says_so_once(pw):
     await open_elsewhere(pw)
     pw.gateway.refuse, pw.gateway.refuse_code = "It is set to run without asking for permission.", "unsafe_mode"
     await pw.feed(pw.msg(102, "@gator second task"))
     assert pw.host.woken == []
-    assert pw.host.killed == ["pty-1"]
-    assert pw.host.n == 2
-    assert pw.host.delivered[-1] == ("pty-2", "second task")
-    assert pw.channel.posted[-1] == commands.lane_moved_on("budget", project="Budget")
-    assert [s.pty_id for s in pw.service.list()] == ["pty-2"]
+    assert pw.host.killed == []
+    assert pw.host.n == 1
+    assert pw.host.delivered == [("pty-1", "first task")]
+    note = commands.lane_opened_elsewhere("budget", project="Budget")
+    assert pw.channel.posted[-1] == note
+    assert pw.channel.posted.count(note) == 1
+    assert "stop budget" in note and "another terminal" in note
+    assert [(s.pty_id, s.state) for s in pw.service.list()] == [("pty-1", "failed")]
     assert "Send your message again to retry" not in posted(pw)
 
 
-async def test_a_lane_whose_open_terminal_is_not_a_reachable_agent_starts_afresh_with_a_one_line_tell(w):
+async def test_a_lane_whose_open_terminal_is_not_a_reachable_agent_is_kept_and_never_killed(w):
     await open_elsewhere(w)
     await w.feed(w.msg(102, "@gator second task"))
-    assert w.host.woken == []
-    assert w.host.delivered[-1] == ("pty-2", "second task")
-    assert w.channel.posted[-1] == commands.lane_moved_on("budget", project="Budget")
+    assert w.host.woken == [] and w.host.killed == [] and w.host.n == 1
+    assert w.channel.posted[-1] == commands.lane_opened_elsewhere("budget", project="Budget")
     assert commands.waking("budget", project="Budget") not in w.channel.posted
-    assert w.state.lanes("teams")["budget"]["pty_id"] == "pty-2"
+    assert w.state.lanes("teams")["budget"]["pty_id"] == "pty-1"
+    assert w.state.lanes("teams")["budget"]["state"] == "failed"
+    await w.feed(w.msg(103, "@gator again"))
+    assert "stop budget" in w.channel.posted[-1]
+    assert w.host.n == 1
+
+
+async def test_a_live_terminal_that_replaced_the_lane_is_never_killed_on_restore(w):
+    session = await asleep(w)
+    w.host.alive_ids.add(session.pty_id)
+    w.host.sleeping_ids.clear()
+    w.host.restorable = [
+        RestoredSession(
+            pty_id="pty-5", project=BUDGET, short="budget", vendor_session_id="vendor-5", created_at=w.clock.now
+        )
+    ]
+    w.host.alive_ids.add("pty-5")
+    w.restart()
+    await w.runner.restore()
+    assert w.host.killed == []
+    assert w.state.lanes("teams")["budget"]["pty_id"] == "pty-1"
+    assert w.state.lanes("teams")["budget"]["state"] == "failed"
+    assert [(s.pty_id, s.state) for s in w.service.list()] == [("pty-1", "failed")]
+    assert w.channel.posted.count(commands.lane_replaced(session.short, project="Budget")) == 1
 
 
 async def test_a_refusal_that_cannot_succeed_never_says_to_send_again(w):
@@ -676,6 +701,20 @@ async def test_messages_queued_during_a_wake_follow_the_first_to_the_terminal_it
     assert lane.queued == []
 
 
+async def test_messages_queued_during_a_wake_are_reported_unsent_when_the_terminal_it_moved_to_cannot_take_them(w):
+    gate = w.host.wake_gate = asyncio.Event()
+    lane = await asleep(w)
+    await w.feed(w.msg(102, "@gator second task"))
+    await w.feed(w.msg(103, "@gator third task"))
+    w.host.elsewhere[lane.pty_id] = "pty-open"
+    gate.set()
+    await woken(w)
+    assert w.host.killed == [] and w.host.n == 1
+    assert w.channel.posted.count(commands.lane_opened_elsewhere("budget", project="Budget")) == 1
+    assert commands.queued_not_sent("budget", 1, project="Budget") in w.channel.posted
+    assert lane.state == "failed"
+
+
 async def test_a_session_that_stopped_being_open_elsewhere_while_it_woke_is_not_blamed_on_the_terminal(w):
     from remote.session_host import OPEN_ELSEWHERE_MESSAGE, OpenElsewhere
 
@@ -695,3 +734,20 @@ async def test_a_host_that_cannot_be_asked_where_the_session_is_wakes_nothing(w)
     await w.feed(w.msg(102, "@gator second task"))
     assert w.host.woken == []
     assert commands.waking("budget", project="Budget") not in w.channel.posted
+
+
+async def test_stop_all_lists_the_sessions_asleep_and_the_prompts_that_were_waiting(w):
+    lane = await asleep(w)
+    await w.service.needs_wake(lane)
+    assert lane.state == "sleeping"
+    await w.feed(w.msg(102, "@gator stop all"))
+    assert w.channel.posted[-1] == commands.stopped(1, asleep=["budget"])
+    assert "Asleep, so their saved sessions are gone: budget." in w.channel.posted[-1]
+
+
+async def test_the_12_hour_end_lists_the_sessions_asleep(w):
+    lane = await asleep(w)
+    await w.service.needs_wake(lane)
+    w.clock.now += 12 * 3600 + 1
+    await w.runner.tick()
+    assert w.channel.posted[-1] == commands.timed_out(12 * 3600, asleep=["budget"])

@@ -75,6 +75,12 @@ def _state_word(session: Session) -> str:
     return commands.WORKING if session.awaiting_since is not None else commands.IDLE
 
 
+def _left_behind(stopped: list[Session]) -> tuple[list[str], list[str]]:
+    asleep = [s.short for s in stopped if s.state == commands.SLEEPING]
+    waiting = [s.short for s in stopped if s.waiting and s.prompt is not None]
+    return asleep, waiting
+
+
 class RemoteRunner:
     def __init__(
         self,
@@ -518,7 +524,10 @@ class RemoteRunner:
         self._guard.stop_all()
         self._state.set_disarmed(self._channel.name, True)
         self._window.close()
-        await self._post(commands.stopped(len(stopped)) if stopped else commands.no_sessions())
+        asleep, waiting = _left_behind(stopped)
+        await self._post(
+            commands.stopped(len(stopped), asleep=asleep, waiting=waiting) if stopped else commands.no_sessions()
+        )
 
     def _pick(self, name: str | None, required: bool = False) -> list[Session]:
         if name:
@@ -966,8 +975,8 @@ class RemoteRunner:
     async def _route_elsewhere(self, session: Session, text: str) -> bool:
         """A lane whose saved session is open in another terminal is never woken, so the message goes where the
         session is: typed into that terminal the way a message to any other agent is (only when it is idle,
-        never woken, closed or suspended from here). When that terminal cannot be messaged at all, the stale
-        lane is dropped and a new session takes the message. True when the message was dealt with."""
+        never woken, closed or suspended from here). When that terminal cannot be messaged at all, the lane is
+        kept, marked failed, and the chat is told. True when the message was dealt with."""
         other = await self._service.open_elsewhere(session)
         if other is None:
             return False
@@ -984,11 +993,8 @@ class RemoteRunner:
                 cause = exc.__cause__
                 if not (isinstance(cause, PeerRefused) and cause.code in NOT_MESSAGEABLE):
                     raise
-        await self._service.replace_lane(session)
-        prompt = f"{text}\n\n{self._hint}" if self._hint else text
-        fresh = await self._service.start(session.project, prompt)
-        self._begin(fresh)
-        await self._post(self._lane_copy(commands.lane_moved_on, fresh))
+        self._service.mark_opened_elsewhere(session)
+        await self._post(self._lane_copy(commands.lane_opened_elsewhere, session))
         return True
 
     async def _start_wake(self, session: Session, text: str) -> None:
@@ -1050,6 +1056,9 @@ class RemoteRunner:
             try:
                 if await self._route_elsewhere(session, pending[0]):
                     pending.pop(0)
+                    if session.state == commands.FAILED:
+                        await self._drop_queued(session, pending)
+                        return
                     continue
             except Refusal as exc:
                 await self._post(str(exc))
@@ -1205,33 +1214,35 @@ class RemoteRunner:
             return None
         return record["deadline"]
 
-    async def _stop_at_deadline(self) -> bool:
+    async def _stop_at_deadline(self) -> list[Session] | None:
         """Stops every session the way `stop all` does. A session that will not stop is retried on
-        the next tick, so the caller only goes on once none are left. True when the stop
-        finished for a window that is still closed."""
+        the next tick, so the caller only goes on once none are left. The sessions it stopped when the
+        stop finished for a window that is still closed, else None."""
         deadline = self._unhandled_deadline()
         if deadline is None:
-            return False
+            return None
         stopped, failed = await self._service.stop_all()
         if failed:
             if self._stop_failure_logged != deadline:
                 self._stop_failure_logged = deadline
                 _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
-            return False
+            return None
         self._state.set_channel_value(self._channel.name, "expiry_handled", deadline)
         if self._master.active():
-            return False
+            return None
         self._guard.stop_all()
         self._window.close()
-        return True
+        return stopped
 
     async def stop_after_deadline(self) -> None:
         """A channel whose switch is off still stops its sessions at the deadline, and says nothing."""
         await self._stop_at_deadline()
 
     async def _expire(self) -> None:
-        if await self._stop_at_deadline():
-            await self._post(commands.timed_out(master_window.ARM_SECONDS))
+        stopped = await self._stop_at_deadline()
+        if stopped is not None:
+            asleep, waiting = _left_behind(stopped)
+            await self._post(commands.timed_out(master_window.ARM_SECONDS, asleep=asleep, waiting=waiting))
 
     async def _warn_if_due(self) -> None:
         record = self._master.record()
