@@ -27,6 +27,7 @@ STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = "Waiting for your answer."
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
+RETRY_POST_SECONDS = 60.0
 _TAGS = ("gator", AGENT_LABEL.lower())
 
 
@@ -77,7 +78,7 @@ class RemoteRunner:
         self._already_open = False
         self._not_sent_noticed: set[str] = set()
         self._summarized: set[tuple[str, str]] = set()
-        self._tried: set[tuple[str, str]] = set()
+        self._unsent: dict[tuple[str, str], float] = {}
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -385,7 +386,7 @@ class RemoteRunner:
             raise _Reply(prompts.confirmation(session.short, session.project.name, prompts.ALREADY_ANSWERED))
         await self._answer(session, command.text)
 
-    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> None:
+    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> bool:
         """One message for this session, remembered by its message id with the prompt and an expiry. A session
         started outside chat says how long it has waited."""
         now = self._clock()
@@ -397,6 +398,7 @@ class RemoteRunner:
             self._state.record_prompt_message(
                 self._channel.name, message_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
             )
+        return bool(message_id)
 
     async def _notify_waiting(self) -> None:
         """Posts a message for each waiting session that is due one and has a place, and names the rest once."""
@@ -406,11 +408,17 @@ class RemoteRunner:
             if (record["session_id"], record["prompt_id"]) not in showing:
                 self._state.clear_prompt_messages(self._channel.name, record["session_id"])
         posted = {(m["session_id"], m["prompt_id"]) for m in self._state.prompt_messages(self._channel.name)}
-        self._tried &= {(s.id, s.prompt.id) for s in sessions if s.prompt is not None}
-        due = needs_you.plan(sessions, posted | self._tried, self._since, self._clock())
+        now = self._clock()
+        self._unsent = {k: at for k, at in self._unsent.items() if k in showing and now - at < RETRY_POST_SECONDS}
+        due = needs_you.plan(
+            [s for s in sessions if (s.id, s.prompt.id if s.prompt else "") not in self._unsent],
+            posted,
+            self._since,
+            now,
+        )
         for session in due.send:
-            self._tried.add((session.id, session.prompt.id))
-            await self._post_prompt(session, session.prompt)
+            if not await self._post_prompt(session, session.prompt):
+                self._unsent[(session.id, session.prompt.id)] = now
         rest = {(s.id, s.prompt.id) for s in due.rest}
         if rest - self._summarized:
             now = self._clock()

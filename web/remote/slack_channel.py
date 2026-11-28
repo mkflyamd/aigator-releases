@@ -15,6 +15,7 @@ from remote.state import State
 _log = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 10
+RECENT_SECONDS = 15 * 60.0
 
 
 def _api(endpoint: str, params: dict | None = None, method: str = "GET") -> dict:
@@ -111,10 +112,19 @@ class SlackSelfDM:
         ]
 
     def poll_replies(self) -> list[InboundMessage]:
-        """Thread replies under the prompt messages still waiting for an answer. `conversations.history` does
-        not list them. The newest ts read per thread is stored, so each reply comes back once."""
+        """Thread replies under the prompt messages waiting for an answer, and under those closed within the
+        last RECENT_SECONDS so a late reply is told it was already answered. `conversations.history` does not
+        list them. The newest ts read per thread is stored, so each reply comes back once."""
         found: list[InboundMessage] = []
-        records = [m for m in self._state.prompt_messages(self.name) if m.get("expires_at", 0) > time.time()]
+        now = time.time()
+        records = [
+            m
+            for m in [
+                *self._state.prompt_messages(self.name),
+                *self._state.recently_closed_prompt_messages(self.name, now - RECENT_SECONDS),
+            ]
+            if m.get("expires_at", 0) > now
+        ]
         if not records:
             return found
         channel = self._resolve_channel()

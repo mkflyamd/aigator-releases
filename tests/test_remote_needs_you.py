@@ -232,3 +232,17 @@ async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting
     [text] = w.channel.posted[before:]
     assert text.startswith("[Gator - budget-4 - Budget] Needs you: permission.")
     assert all(m["session_id"] != w.service.resolve("budget").id for m in routed(w))
+
+
+async def test_a_post_that_failed_holds_no_place_and_is_tried_again_after_a_minute(w):
+    await several(w, 4)
+    w.channel.own = False
+    for n in range(1, 4):
+        await show(w, f"pty-{n}", BASH_PERMISSION, at=n)
+    assert routed(w) == []
+    w.channel.own = True
+    await show(w, "pty-4", BASH_PERMISSION, at=4)
+    assert [m["session_id"] for m in routed(w)] == [w.service.resolve("budget-4").id]
+    w.clock.now += 61
+    await w.runner.tick()
+    assert len(routed(w)) == 3

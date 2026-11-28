@@ -403,3 +403,28 @@ def test_no_replies_are_asked_for_when_no_prompt_message_is_open_or_it_has_expir
     state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() - 1, time.time() - 10)
     assert channel.poll_replies() == []
     assert [c for c in slack.calls if c[0] == "conversations.replies"] == []
+
+
+def test_a_reply_under_a_prompt_that_closed_a_minute_ago_is_still_read_so_it_can_be_told_it_was_answered(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    state.clear_prompt_messages("slack", "pty:1")
+    slack.threads["1700000000.000001"] = [reply("1700000001.000001", "allow")]
+    [got] = channel.poll_replies()
+    assert got.reply_to == "1700000000.000001"
+    assert channel.poll_replies() == []
+
+
+def test_a_prompt_closed_long_ago_is_no_longer_polled(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    state.clear_prompt_messages("slack", "pty:1")
+    assert channel.poll_replies() == []
+    stored = state._load()["slack"]["prompt_closed"]
+    stored[0]["closed_at"] = time.time() - 3600
+    state._save(state._load() | {"slack": {**state._load()["slack"], "prompt_closed": stored}})
+    slack.calls.clear()
+    assert channel.poll_replies() == []
+    assert [c for c in slack.calls if c[0] == "conversations.replies"] == []

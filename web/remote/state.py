@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -129,7 +130,12 @@ class State:
             before = entry.get("prompt_messages", [])
             after = [m for m in before if not (isinstance(m, dict) and m.get("session_id") == session_id)]
             if len(after) != len(before):
-                gone = [m for m in before if isinstance(m, dict) and m.get("session_id") == session_id]
+                closed_at = time.time()
+                gone = [
+                    {**m, "closed_at": closed_at}
+                    for m in before
+                    if isinstance(m, dict) and m.get("session_id") == session_id
+                ]
                 entry["prompt_messages"] = after
                 entry["prompt_closed"] = [*entry.get("prompt_closed", []), *gone][-PROMPT_MESSAGES_KEEP:]
                 self._save(data)
@@ -138,6 +144,12 @@ class State:
         with self._lock:
             found = (self._load().get(channel) or {}).get("prompt_messages", [])
         return [m for m in found if isinstance(m, dict)]
+
+    def recently_closed_prompt_messages(self, channel: str, since: float) -> list[dict]:
+        """Prompt messages whose prompt closed after `since` (unix seconds), for replies that still arrive."""
+        with self._lock:
+            found = (self._load().get(channel) or {}).get("prompt_closed", [])
+        return [m for m in found if isinstance(m, dict) and m.get("closed_at", 0) > since]
 
     def find_prompt_message(self, channel: str, message_id: str, now: float) -> tuple[dict, bool] | None:
         """The record for a posted prompt message and whether it is still open, or None when this chat
@@ -154,7 +166,8 @@ class State:
         """Remembers the newest reply read in the thread of a prompt message, so each reply is read once."""
         with self._lock:
             data = self._load()
-            for m in self._channel(data, channel).get("prompt_messages", []):
+            entry = self._channel(data, channel)
+            for m in [*entry.get("prompt_messages", []), *entry.get("prompt_closed", [])]:
                 if isinstance(m, dict) and m.get("message_id") == message_id:
                     m["reply_ts"] = reply_ts
                     self._save(data)
