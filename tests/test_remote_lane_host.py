@@ -364,6 +364,33 @@ async def test_a_lane_whose_record_is_gone_is_woken_from_what_the_lane_remembers
     assert calls.ptys["pty-1"] is not None
 
 
+PROSE_SCREEN = (
+    "I asked Claude what it shows for a big session. It says: This session is 3 days old and 142.5k tokens,\r\n"
+    "then offers to Resume from summary (recommended) or Resume full session as-is, and I picked the first.\r\n"
+    "A pasted transcript follows: choose 1. Resume from summary or 2. Resume full session as-is.\r\n"
+    "> \r\n"
+)
+
+
+def test_the_same_words_in_prose_in_the_last_screenful_are_not_the_resume_question(calls):
+    calls.ptys["pty-1"].text = PROSE_SCREEN
+    assert len(PROSE_SCREEN) < session_host.PROMPT_TAIL_CHARS
+    assert LocalPtyHost._resume_prompt_showing("pty-1") is False
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        PROMPT_SCREEN,
+        "\x1b[36m❯ 1. Resume from summary (recommended)\x1b[0m\r\n  2. Resume full session as-is\r\n",
+        "│ 1. Resume from summary (recommended)  │\r\n│\r\n│ 2. Resume full session as-is  │\r\n",
+    ],
+)
+def test_the_dialogs_numbered_choices_are_the_resume_question(calls, screen):
+    calls.ptys["pty-1"].text = "earlier output\r\n" + screen
+    assert LocalPtyHost._resume_prompt_showing("pty-1") is True
+
+
 def test_the_resume_question_is_only_looked_for_at_the_end_of_the_screen(calls):
     calls.ptys["pty-1"].text = PROMPT_SCREEN + "x" * session_host.PROMPT_TAIL_CHARS
     assert LocalPtyHost._resume_prompt_showing("pty-1") is False

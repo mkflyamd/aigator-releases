@@ -399,8 +399,9 @@ async def test_a_stored_lane_with_neither_process_nor_save_is_dropped_on_restart
     assert w.state.lanes("teams") == {}
 
 
-async def test_a_live_session_found_after_a_restart_replaces_a_stale_lane_for_its_project(w):
+async def test_a_live_session_found_after_a_restart_replaces_a_stale_lane_with_nothing_saved(w):
     await asleep(w)
+    w.host.sleeping_ids.clear()
     w.host.restorable = [
         RestoredSession(
             pty_id="pty-5", project=BUDGET, short="budget", vendor_session_id="vendor-5", created_at=w.clock.now
@@ -413,7 +414,47 @@ async def test_a_live_session_found_after_a_restart_replaces_a_stale_lane_for_it
     assert [(s.pty_id, s.state) for s in sessions] == [("pty-5", "live")]
     assert [lane["pty_id"] for lane in w.state.lanes("teams").values()] == ["pty-5"]
     assert w.host.killed == ["pty-1"]
+
+
+async def test_a_newer_terminal_never_costs_a_sleeping_lane_its_saved_session(w):
+    session = await asleep(w)
+    w.host.restorable = [
+        RestoredSession(
+            pty_id="pty-5", project=BUDGET, short="budget", vendor_session_id="vendor-5", created_at=w.clock.now
+        )
+    ]
+    w.host.alive_ids.add("pty-5")
+    w.restart()
+    await w.runner.restore()
+    assert [(s.pty_id, s.state) for s in w.service.list()] == [("pty-1", "failed")]
+    assert w.host.killed == []
+    assert w.host.sleeping_ids == {"pty-1"}
+    assert "pty-5" in w.host.alive_ids
+    assert w.state.lanes("teams")["budget"]["state"] == "failed"
+    assert w.channel.posted[-1] == commands.lane_replaced(session.short, project="Budget")
+    assert sum(text == commands.lane_replaced(session.short, project="Budget") for text in w.channel.posted) == 1
+    await w.feed(w.msg(103, "@gator again"))
+    assert "stop budget" in w.channel.posted[-1]
+    await w.feed(w.msg(104, "@gator stop budget"))
+    assert w.host.killed == ["pty-1"]
     assert w.host.sleeping_ids == set()
+
+
+async def test_a_newer_terminal_does_not_replace_a_lane_whose_session_is_saved_on_disk(w):
+    await w.feed(w.msg(100, "old note"))
+    await w.feed(w.msg(101, "@gator first task"))
+    w.host.alive_ids.discard("pty-1")
+    w.host.saved_ids.add("vendor-1")
+    w.host.restorable = [
+        RestoredSession(
+            pty_id="pty-5", project=BUDGET, short="budget", vendor_session_id="vendor-5", created_at=w.clock.now
+        )
+    ]
+    w.host.alive_ids.add("pty-5")
+    w.restart()
+    await w.runner.restore()
+    assert [(s.pty_id, s.state) for s in w.service.list()] == [("pty-1", "failed")]
+    assert w.host.killed == []
 
 
 async def test_a_second_running_terminal_for_a_project_is_left_alone_and_reported(w):

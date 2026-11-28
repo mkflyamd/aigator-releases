@@ -382,6 +382,8 @@ class RemoteRunner:
             await self._post(commands.agent_stopped(short, project=project, several=several))
         elif event.kind == "lost":
             await self._post(commands.lane_lost(short, project=project, several=several))
+        elif event.kind == "replaced":
+            await self._post(commands.lane_replaced(short, project=project, several=several))
         elif event.kind == "duplicate":
             await self._post(commands.duplicate_lane(short, project=project, several=several))
         else:

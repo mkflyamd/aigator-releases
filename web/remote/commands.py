@@ -422,6 +422,20 @@ def duplicate_lane(session: str, *, project: str | None = None, several: bool = 
     )
 
 
+LANE_REPLACED_REASON = "A newer remote terminal for this project replaced this lane."
+
+
+def lane_replaced(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """After a restart a newer terminal was found for a project whose lane still has a saved session."""
+    return agent_reply(
+        session,
+        f"{LANE_REPLACED_REASON} Its saved session was kept, and the newer terminal was left running.",
+        [f"`stop {session}` to clear the saved session.", "Close the newer terminal in AI Gator if it is not wanted."],
+        project=project,
+        several=several,
+    )
+
+
 def no_default_project() -> str:
     return system_reply(
         "No default project is set, so there is nowhere to start a session.",

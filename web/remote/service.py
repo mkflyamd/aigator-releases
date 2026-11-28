@@ -75,7 +75,7 @@ class Session:
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # completed | input-required | failed | canceled | lost | duplicate
+    kind: str  # completed | input-required | failed | canceled | lost | duplicate | replaced
     session: Session
     text: str = ""
 
@@ -209,15 +209,24 @@ class RemoteService:
                 continue
             lane = lanes.get(project_id) or {}
             keep = next((r for r in found if r.pty_id == lane.get("pty_id")), found[-1])
+            if lane and lane["pty_id"] != keep.pty_id:
+                old = self._session_from_lane(lane, now)
+                if await self._host.sleeping(old.pty_id) or await self._host.saved(old.project, old.vendor_session_id):
+                    # Something is saved for the stored lane. A newer terminal must not cost the user
+                    # that: the lane is kept, marked failed, and `stop` is what clears it.
+                    _log.warning(
+                        "remote lane %s for %s has a saved session; the newer terminal %s is left alone",
+                        lane["short"], project_id, keep.pty_id,
+                    )
+                    old.state, old.failure = FAILED, commands.LANE_REPLACED_REASON
+                    self._sessions[old.id] = old
+                    self._persist(old)
+                    await self._emit("replaced", old)
+                    continue
+                await self._host.kill(old.pty_id)
             for extra in found:
                 if extra is not keep:
                     await self._report_duplicate(extra, now)
-            if lane and lane["pty_id"] != keep.pty_id:
-                _log.warning(
-                    "remote lane %s for %s was %s; the running terminal %s replaces it",
-                    lane["short"], project_id, lane["state"], keep.pty_id,
-                )
-                await self._host.kill(lane["pty_id"])
             same = lane.get("pty_id") == keep.pty_id
             session = Session(
                 id=f"pty:{keep.pty_id}",

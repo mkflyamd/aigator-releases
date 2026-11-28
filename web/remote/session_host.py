@@ -20,8 +20,14 @@ WOKEN_BY = "Remote control"
 PROMPT_CHECK_SECONDS = 3.0
 PROMPT_TAIL_CHARS = 2000
 TYPE_SETTLE_SECONDS = 0.5
-# Claude Code asks this before resuming a large old session; the wording is from its own dialog.
-RESUME_PROMPT = re.compile(r"Resume from summary|Resume full session as-is|This session is .{1,40} old and .{1,20} tokens")
+# Claude Code asks this before resuming a large old session. Only the dialog's own shape counts: its
+# two numbered choices on consecutive lines, each at the start of a line (a selection marker or a
+# box edge may precede it). The same words in prose, or in a quoted transcript, do not match.
+_CHOICE = r"^[ \t│|]*(?:[>❯›]\s*)?\d\.\s+"
+RESUME_PROMPT = re.compile(
+    _CHOICE + r"Resume from summary[^\n]*\n(?:[ \t│|]*\r?\n)*" + _CHOICE + r"Resume full session as-is",
+    re.MULTILINE,
+)
 IN_USE_MESSAGE = "Someone is using that session in AI Gator right now, so nothing was sent. Send it again when they are done."
 OPEN_ELSEWHERE_MESSAGE = (
     "That session is open in another terminal on this computer, so it was not woken. "
