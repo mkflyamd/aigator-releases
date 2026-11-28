@@ -29,7 +29,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:/bin/{agent}.exe")
     monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: w["hooks"])
     monkeypatch.setattr(agent_state, "opencode_supports_plugin", lambda exe: w["hooks"])
-    monkeypatch.setattr(terminal, "_list_host_sessions", lambda: [{"id": i, "meta": m} for i, m in w["live"].items()])
+    monkeypatch.setattr(terminal, "_list_host_sessions", lambda strict=False: [{"id": i, "meta": m} for i, m in w["live"].items()])
     monkeypatch.setattr(terminal, "_pty_sessions", {})
     monkeypatch.setattr(agent_wake, "title_of", lambda project, agent, session: "Crushy" if agent == "crush" else "Design head")
     return w
