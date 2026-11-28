@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 _log = logging.getLogger(__name__)
 
@@ -18,6 +18,8 @@ _TRANSCRIPT_WAIT = 0.5
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 WOKEN_BY = "Remote control"
 PROMPT_CHECK_SECONDS = 3.0
+PROMPT_TAIL_CHARS = 2000
+TYPE_SETTLE_SECONDS = 0.5
 # Claude Code asks this before resuming a large old session; the wording is from its own dialog.
 RESUME_PROMPT = re.compile(r"Resume from summary|Resume full session as-is|This session is .{1,40} old and .{1,20} tokens")
 IN_USE_MESSAGE = "Someone is using that session in AI Gator right now, so nothing was sent. Send it again when they are done."
@@ -25,6 +27,8 @@ OPEN_ELSEWHERE_MESSAGE = (
     "That session is open in another terminal on this computer, so it was not woken. "
     "Close it there, or keep using it there."
 )
+HOST_UNREACHABLE_MESSAGE = "The terminal host did not answer, so nothing was done. Try again in a moment."
+WAKE_CANCELLED_MESSAGE = "The wake was called off."
 RESUME_PROMPT_MESSAGE = (
     "Claude is asking how to resume this large session (from a summary or in full), "
     "and it will not take a message until someone answers. Nothing was sent. "
@@ -87,7 +91,15 @@ class SessionHost(Protocol):
     async def deliver(self, pty_id: str, text: str) -> None: ...
     async def alive(self, pty_id: str) -> bool: ...
     async def sleeping(self, pty_id: str) -> bool: ...
-    async def wake(self, pty_id: str, project: Project, labels: dict[str, str]) -> None: ...
+    async def saved(self, project: Project, vendor_session_id: str | None) -> bool: ...
+    async def wake(
+        self,
+        pty_id: str,
+        project: Project,
+        labels: dict[str, str],
+        vendor_session_id: str | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
+    ) -> None: ...
     async def kill(self, pty_id: str) -> None: ...
     async def state(self, pty_id: str) -> dict | None: ...
     async def last_message(self, pty_id: str) -> str: ...
@@ -168,6 +180,9 @@ class LocalPtyHost:
         try:
             await asyncio.to_thread(self._refuse_if_in_use, pty_id)
             await agent_wake._wait_ready(pty_id, agent_wake.LIVE_READY_SECONDS)
+            # The wait can be long: someone may have opened the terminal meanwhile.
+            await asyncio.sleep(TYPE_SETTLE_SECONDS)
+            await asyncio.to_thread(self._refuse_if_in_use, pty_id)
             await agent_wake._type_message(pty_id, agent_wake.clean(text))
         except agent_wake.WakeRefused as exc:
             raise HostError(exc.reason) from exc
@@ -187,9 +202,14 @@ class LocalPtyHost:
             raise HostError(IN_USE_MESSAGE)
 
     async def alive(self, pty_id: str) -> bool:
+        """Asks the terminal host and never guesses: a host that does not answer raises HostError,
+        so "could not ask" is never taken for "not running"."""
         from routes import terminal
 
-        return await asyncio.to_thread(terminal.is_pty_alive, pty_id)
+        try:
+            return await asyncio.to_thread(terminal.pty_alive_strict, pty_id)
+        except terminal.HostUnreachable as exc:
+            raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
 
     async def sleeping(self, pty_id: str) -> bool:
         """True when the idle sweep suspended this terminal and left its record: the session
@@ -198,68 +218,126 @@ class LocalPtyHost:
 
         return await asyncio.to_thread(agent_suspend.suspended_record, pty_id) is not None
 
-    async def wake(self, pty_id: str, project: Project, labels: dict[str, str]) -> None:
-        """Resumes the saved session under its own terminal id and waits until it takes input.
-        Returns only when the session is running and ready. Never starts a session of its own:
-        every failure raises, and a session that is already open in another terminal is refused."""
+    async def saved(self, project: Project, vendor_session_id: str | None) -> bool:
+        """True when the agent's own stored session for this lane is on disk, so the lane can be
+        woken even though nothing records it as suspended."""
+        import agent_sessions
+        import agent_wake
+
+        if not vendor_session_id:
+            return False
+        repo = await asyncio.to_thread(agent_wake._project_repo, project.id)
+        if not repo:
+            return False
+        try:
+            found = await asyncio.to_thread(agent_sessions.find_session, repo, project.agent, vendor_session_id)
+        except Exception:
+            _log.warning("could not look up the stored session %s", vendor_session_id, exc_info=True)
+            return False
+        return found is not None
+
+    async def wake(
+        self,
+        pty_id: str,
+        project: Project,
+        labels: dict[str, str],
+        vendor_session_id: str | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
+    ) -> None:
+        """Resumes the lane's session under its own terminal id and waits until it takes input.
+        Returns only when the session is running and ready, and at once when it already is. The
+        session comes from the suspend record, or from the lane when the record is gone. Never
+        starts a session of its own: every failure raises, a session open in another terminal is
+        refused, and one that fails on the way up is closed again and stays saved. `cancelled` is
+        polled while waiting, so a stop is not held up by a slow wake."""
         import agent_suspend
         import agent_wake
 
-        record = await asyncio.to_thread(agent_suspend.suspended_record, pty_id)
-        if record is None or not record.get("session_id"):
+        if await self.alive(pty_id):
+            return
+        record = await asyncio.to_thread(agent_suspend.suspended_record, pty_id) or {}
+        session_id = record.get("session_id") or vendor_session_id
+        if not session_id:
             raise HostError("That session was not saved, so it cannot be woken. Stop it and start a new one.", True)
-        session_id = record["session_id"]
         if not agent_wake.claim(session_id):
             raise HostError("That session is being woken or suspended right now. Send it again in a moment.")
         try:
-            await self._wake_claimed(pty_id, project, labels, record)
+            await self._wake_claimed(
+                pty_id,
+                labels,
+                session_id,
+                record.get("agent") or project.agent,
+                record.get("project_id") or project.id,
+                cancelled,
+            )
         finally:
             agent_wake.release(session_id)
 
-    async def _wake_claimed(self, pty_id: str, project: Project, labels: dict[str, str], record: dict) -> None:
+    async def _wake_claimed(
+        self,
+        pty_id: str,
+        labels: dict[str, str],
+        session_id: str,
+        agent: str,
+        project_id: str,
+        cancelled: Callable[[], bool],
+    ) -> None:
         import agent_sessions
         import agent_suspend
         import agent_wake
         from fastapi import HTTPException
-        from routes import generic_agent_routes
+        from routes import generic_agent_routes, terminal
 
-        session_id, agent = record["session_id"], record.get("agent") or project.agent
-        repo = await asyncio.to_thread(agent_wake._project_repo, record.get("project_id") or project.id)
+        repo = await asyncio.to_thread(agent_wake._project_repo, project_id)
         if not repo:
             raise HostError("The project this session belonged to no longer exists.", True)
         if await asyncio.to_thread(agent_sessions.find_session, repo, agent, session_id) is None:
             raise HostError("The saved session is gone, so it cannot be woken. Stop it and start a new one.", True)
-        if await asyncio.to_thread(self._open_elsewhere, pty_id, agent, session_id):
-            raise HostError(OPEN_ELSEWHERE_MESSAGE)
+
+        async def guard() -> None:
+            # Runs under the resume lock, so what it checks cannot change before the spawn.
+            try:
+                elsewhere = await asyncio.to_thread(self._open_elsewhere, pty_id, agent, session_id)
+            except terminal.HostUnreachable as exc:
+                raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
+            if elsewhere:
+                raise HostError(OPEN_ELSEWHERE_MESSAGE)
+            if cancelled():
+                raise HostError(WAKE_CANCELLED_MESSAGE)
+
         req = generic_agent_routes.GenericAgentTerminalRequest(
-            agent=agent, project_id=record.get("project_id") or project.id, repo_path=repo, resume_id=session_id
+            agent=agent, project_id=project_id, repo_path=repo, resume_id=session_id
         )
         try:
-            result = await generic_agent_routes.resume_suspended(req, pty_id, WOKEN_BY, "", labels)
+            result = await generic_agent_routes.resume_suspended(req, pty_id, WOKEN_BY, "", labels, guard)
+        except HostError:
+            raise
         except HTTPException as exc:
             raise HostError(f"The session could not be woken: {exc.detail}") from exc
         except Exception as exc:
             _log.warning("could not wake %s", pty_id, exc_info=True)
+            await asyncio.to_thread(self._close_again, pty_id)
             raise HostError("The session could not be woken.") from exc
         if result["pty_session_id"] != pty_id:
             raise HostError(OPEN_ELSEWHERE_MESSAGE)
         try:
-            await self._wait_awake(pty_id)
-        finally:
-            # The record goes once the process holds the session. One that died on the way up
-            # keeps it, so the next message can try again.
-            running = await agent_wake._pty(pty_id)
-            if running is not None and not running.done:
-                await asyncio.to_thread(agent_suspend.forget, pty_id)
+            await self._wait_awake(pty_id, cancelled)
+        except BaseException:
+            # Whatever went wrong once the process had started, it is closed again and its record
+            # kept: the session stays asleep and the next message can try once more.
+            await asyncio.to_thread(self._close_again, pty_id)
+            raise
+        await asyncio.to_thread(agent_suspend.forget, pty_id)
 
     @staticmethod
     def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> bool:
         """True when a terminal other than this lane's holds the session: the user resumed it in
-        the Code tab. Two processes must never share one stored session."""
+        the Code tab. Two processes must never share one stored session. Raises HostUnreachable
+        when the terminal host cannot be asked."""
         import generic_agent
         from routes import terminal
 
-        for live_id, meta in terminal.live_pty_labels().items():
+        for live_id, meta in terminal.live_pty_labels(strict=True).items():
             if live_id != pty_id and meta.get("agent") == agent and meta.get("session_id") == session_id:
                 return True
         for other in generic_agent.ptys_for_session(agent, session_id):
@@ -268,16 +346,17 @@ class LocalPtyHost:
                 return True
         return False
 
-    async def _wait_awake(self, pty_id: str) -> None:
+    async def _wait_awake(self, pty_id: str, cancelled: Callable[[], bool] = lambda: False) -> None:
         """Waits for the resumed session to take input. A large old session makes Claude ask how to
         resume it (from a summary or in full) before it will take any: that is never answered
-        for the user, so the session is closed again, still saved, and the user is told."""
+        for the user, so the caller closes it again, still saved, and the user is told."""
         import agent_wake
 
         deadline = time.monotonic() + agent_wake.WAKE_READY_SECONDS
         while True:
+            if cancelled():
+                raise HostError(WAKE_CANCELLED_MESSAGE)
             if await asyncio.to_thread(self._resume_prompt_showing, pty_id):
-                await asyncio.to_thread(self._close_again, pty_id)
                 raise HostError(RESUME_PROMPT_MESSAGE)
             try:
                 await agent_wake._wait_ready(pty_id, min(PROMPT_CHECK_SECONDS, max(deadline - time.monotonic(), 0.1)))
@@ -288,6 +367,8 @@ class LocalPtyHost:
 
     @staticmethod
     def _resume_prompt_showing(pty_id: str) -> bool:
+        """Only the end of the screen counts: the dialog is what the terminal shows now, and the
+        same words further back may be the agent quoting its own transcript."""
         from routes import terminal
 
         entry = terminal.get_pty_session(pty_id)
@@ -297,7 +378,7 @@ class LocalPtyHost:
             text, _ = entry.read_from(0)
         except Exception:
             return False
-        return bool(RESUME_PROMPT.search(_ANSI.sub("", text)))
+        return bool(RESUME_PROMPT.search(_ANSI.sub("", text)[-PROMPT_TAIL_CHARS:]))
 
     @staticmethod
     def _close_again(pty_id: str) -> None:
@@ -306,6 +387,8 @@ class LocalPtyHost:
 
         if terminal.close_pty_session(pty_id):
             generic_agent.unpin_session(pty_id)
+        else:
+            _log.warning("could not close %s again after a failed wake", pty_id)
 
     async def kill(self, pty_id: str) -> None:
         import agent_suspend
@@ -313,7 +396,7 @@ class LocalPtyHost:
         from routes import terminal
 
         # A sleeping lane has no process to close: stopping it only drops what was saved.
-        if await asyncio.to_thread(terminal.is_pty_alive, pty_id):
+        if await self.alive(pty_id):
             if not await asyncio.to_thread(terminal.close_pty_session, pty_id):
                 raise HostError("The terminal could not be closed.")
         generic_agent.unpin_session(pty_id)

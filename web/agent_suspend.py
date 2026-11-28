@@ -229,6 +229,10 @@ def _suspend_claimed(pty_id: str, meta: dict, idle_at: float, now: float) -> boo
         "title": stored.get("title") or "",
         "at": now,
     }
+    # A remote-control lane keeps its labels, so whoever wakes it (a peer, not only the lane's
+    # own channel) brings it back pinned and tracked, never as a plain terminal.
+    if meta.get("remote_pinned"):
+        record["labels"] = {k: v for k, v in meta.items() if k.startswith("remote_") and k != "remote_pinned"}
     _remember(pty_id, record, now)
     if not terminal.close_pty_session(pty_id):
         logger.warning("could not suspend terminal %s", pty_id)

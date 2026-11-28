@@ -15,7 +15,7 @@ from typing import Callable
 from remote import commands
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
-from remote.service import Event, RemoteError, RemoteService, Session
+from remote.service import Aborted, Asleep, Event, Refusal, RemoteError, RemoteService, Session
 from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
@@ -27,10 +27,6 @@ STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = "Waiting for your answer."
 _TAGS = ("gator", AGENT_LABEL.lower())
-
-
-class _Reply(RemoteError):
-    """A RemoteError whose text is already a finished chat message."""
 
 
 @dataclass
@@ -94,11 +90,20 @@ class RemoteRunner:
                 self._state.set_disarmed(channel, False)
             if self._enabled:
                 self._guard.disarm()
+            self._service.abort_wakes()
             self._window.close()
         self._enabled = enabled
 
     async def restore(self) -> None:
         await self._service.restore()
+
+    async def shutdown(self) -> None:
+        """Ends the background wakes before the backend goes down."""
+        self._service.abort_wakes()
+        tasks = list(self._wakes)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def announce_online(self) -> None:
         """Its text is about opening a chat, so it is not said into one that is already open."""
@@ -196,13 +201,13 @@ class RemoteRunner:
             return
         try:
             await self._dispatch(command)
-        except _Reply as exc:
+        except Refusal as exc:
             await self._post(str(exc))
         except RemoteError as exc:
             await self._post(commands.error_reply(str(exc)))
         except Exception:
             _log.warning("Remote command %s failed", command.kind, exc_info=True)
-            await self._post(commands.error_reply("That command failed and was not retried."))
+            await self._post(commands.command_failed())
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
@@ -242,13 +247,13 @@ class RemoteRunner:
         if name:
             session = self._service.resolve(name)
             if session is None:
-                raise _Reply(commands.session_not_found(name))
+                raise Refusal(commands.session_not_found(name))
             return [session]
         sessions = self._service.list()
         if required and len(sessions) != 1:
             if not sessions:
-                raise _Reply(commands.no_sessions())
-            raise _Reply(commands.which_to_stop([s.short for s in sessions]))
+                raise Refusal(commands.no_sessions())
+            raise Refusal(commands.which_to_stop([s.short for s in sessions]))
         return sessions
 
     def _describe(self, sessions: list[Session]) -> str:
@@ -274,12 +279,12 @@ class RemoteRunner:
             session = self._service.resolve(name)
             if session is not None:
                 if not rest:
-                    raise _Reply(commands.mention_needs_text(session.short))
+                    raise Refusal(commands.mention_needs_text(session.short))
                 await self._deliver(session, rest)
                 return
             if name.lower() not in _TAGS:
                 recent = sorted(self._service.list(), key=lambda s: s.last_activity, reverse=True)
-                raise _Reply(commands.unknown_mention(name, [s.short for s in recent]))
+                raise Refusal(commands.unknown_mention(name, [s.short for s in recent]))
             if not rest:
                 await self._post(commands.help_text(self._window.is_open()))
                 return
@@ -296,11 +301,11 @@ class RemoteRunner:
         elif len(sessions) == 1:
             await self._deliver(sessions[0], text)
         elif sessions:
-            raise _Reply(commands.which_session([s.short for s in sessions]))
+            raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
             project = self._service.default_project()
             if project is None:
-                raise RemoteError("No default project is set. Choose one in Settings, then resend.")
+                raise Refusal(commands.no_default_project())
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
@@ -308,7 +313,15 @@ class RemoteRunner:
         if await self._service.needs_wake(session):
             await self._start_wake(session, text)
             return
-        await self._service.send(session.id, text)
+        try:
+            await self._service.send(session.id, text)
+        except Asleep:
+            await self._start_wake(session, text)
+            return
+        except Refusal:
+            raise
+        except RemoteError as exc:
+            raise Refusal(self._lane_copy(commands.send_failed, session, str(exc))) from exc
         self._begin(session)
 
     async def _start_wake(self, session: Session, text: str) -> None:
@@ -318,17 +331,24 @@ class RemoteRunner:
         self._service.begin_wake(session)
         await self._post(self._lane_copy(commands.waking, session))
         task = asyncio.create_task(self._wake(session, text))
+        self._service.attach_wake(session, task)
         self._wakes.add(task)
         task.add_done_callback(self._wakes.discard)
 
     async def _wake(self, session: Session, text: str) -> None:
         try:
             await self._service.wake(session, text, proceed=lambda: self._guard.armed)
+        except Aborted:
+            return
         except RemoteError as exc:
-            await self._post(self._lane_copy(commands.wake_failed, session, str(exc)))
+            if session.stopping:
+                return
+            await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
         except Exception:
             _log.warning("Remote wake of %s failed", session.short, exc_info=True)
-            await self._post(self._lane_copy(commands.wake_failed, session, "The session could not be woken."))
+            if session.stopping:
+                return
+            await self._post(self._lane_copy(commands.wake_failed, session))
         else:
             self._begin(session)
 
@@ -362,15 +382,16 @@ class RemoteRunner:
             await self._post(commands.agent_stopped(short, project=project, several=several))
         elif event.kind == "lost":
             await self._post(commands.lane_lost(short, project=project, several=several))
+        elif event.kind == "duplicate":
+            await self._post(commands.duplicate_lane(short, project=project, several=several))
         else:
             await self._post(commands.working_ack(short, event.kind, project=project, several=several))
 
-    def _lane_copy(self, build, session: Session, *args: str) -> str:
-        return build(session.short, *args, project=session.project.name, several=self._several(session))
+    def _lane_copy(self, build, session: Session, *args, **kwargs) -> str:
+        return build(session.short, *args, project=session.project.name, several=self._several(session), **kwargs)
 
     def _several(self, session: Session) -> bool:
-        """True while more than one session is live, counting one that has just left the table."""
-        return len({s.id for s in self._service.list()} | {session.id}) > 1
+        return self._service.several(session)
 
     async def _report_progress(self) -> None:
         """A turn that outlives ACK_DELAY_SECONDS gets one 'Working on it', then 'Still working' every

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -180,12 +181,17 @@ async def resume_suspended(
     woken_by: str,
     woken_preview: str = "",
     labels: dict[str, str] | None = None,
+    guard: Callable[[], Awaitable[None]] | None = None,
 ) -> dict:
     """Resume a suspended session under its old terminal id, so a tab still holding
     that id reattaches. Returns the terminal, or the live one when the session is
     already running (`created` is False then). `labels` makes the terminal a pinned
-    remote-control one again, with the labels it was started with."""
+    remote-control one again, with the labels it was started with. `guard` runs once the
+    resume lock is held, so what it checks cannot change before the spawn; it refuses by
+    raising."""
     async with _resume_lock:
+        if guard is not None:
+            await guard()
         return await _open_terminal(
             req,
             reuse_pty_id=pty_id,

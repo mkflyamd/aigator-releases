@@ -534,8 +534,8 @@ async def test_the_audit_file_keeps_only_the_latest_lines(world, monkeypatch):
 def real_resume(monkeypatch):
     calls = {}
 
-    async def resume_suspended(req, pty, woken_by, woken_preview=""):
-        calls.update(req=req, pty=pty, by=woken_by, preview=woken_preview)
+    async def resume_suspended(req, pty, woken_by, woken_preview="", labels=None):
+        calls.update(req=req, pty=pty, by=woken_by, preview=woken_preview, labels=labels)
         if calls.get("raise"):
             raise calls["raise"]
         return {"pty_session_id": pty, "created": True}
@@ -563,6 +563,19 @@ async def test_the_stored_session_is_resumed_under_its_old_terminal_id(real_resu
     assert real_resume["req"].resume_id == TARGET_SESSION and real_resume["req"].agent == "claude"
     assert real_resume["req"].force_new is False
     assert real_resume["by"] == "Turn issues" and real_resume["preview"] == "hello"
+
+
+async def test_a_peer_wake_of_a_remote_lane_resumes_it_with_its_labels_so_it_stays_pinned(real_resume):
+    labels = {"remote_channel": "teams", "remote_short": "budget", "remote_created": "1.0"}
+    entry = entry_for(pty_id())
+    entry["record"]["labels"] = labels
+    await agent_wake._resume(entry, "a peer", "hello")
+    assert real_resume["labels"] == labels
+
+
+async def test_a_plain_terminal_resumes_without_labels(real_resume):
+    await agent_wake._resume(entry_for(pty_id()), "a peer", "hello")
+    assert real_resume["labels"] is None
 
 
 async def test_a_missing_transcript_is_a_failure_not_a_new_session(real_resume, monkeypatch):

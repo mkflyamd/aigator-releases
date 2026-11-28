@@ -360,14 +360,77 @@ def waking(session: str, *, project: str | None = None, several: bool = False) -
     )
 
 
-def wake_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
+def wake_failed(
+    session: str, reason: str = "The session could not be woken.", *, permanent: bool = False,
+    project: str | None = None, several: bool = False,
+) -> str:
+    """Nothing was sent. A transient failure can be retried by sending again; a permanent one cannot."""
+    option = (
+        f"`stop {session}`, then send a message to start a new session."
+        if permanent
+        else f"Send your message again to retry, or `stop {session}`."
+    )
+    return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
+
+
+def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A message that arrives while the wake is under way. It is not queued."""
     return agent_reply(
         session,
-        f"Nothing was sent.\n{reason}",
-        [f"Send your message again to retry, or `stop {session}`."],
+        "Still waking up. That message was not sent.",
+        ["Send it again once it is ready.", f"`status {session}` to check on it."],
         project=project,
         several=several,
     )
+
+
+def wake_too_soon(session: str, wait_seconds: float, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Could not be woken a moment ago. Nothing was sent.",
+        [f"Try again in {int(wait_seconds) + 1} seconds."],
+        project=project,
+        several=several,
+    )
+
+
+def already_has_session(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Already has a session in this project.",
+        [f"`{session}: your message` to use it.", f"`stop {session}` to end it first."],
+        project=project,
+        several=several,
+    )
+
+
+def send_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, f"Nothing was sent.\n{reason}", [f"Send your message again to retry, or `stop {session}`."],
+        project=project, several=several,
+    )
+
+
+def duplicate_lane(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A second running terminal for a project that already has a remote session."""
+    return agent_reply(
+        session,
+        "A second remote terminal for this project is running. It was left alone, and chat cannot manage it.",
+        ["Close it in AI Gator."],
+        project=project,
+        several=several,
+    )
+
+
+def no_default_project() -> str:
+    return system_reply(
+        "No default project is set, so there is nowhere to start a session.",
+        [f"Pick a default project in AI Gator {SETTINGS_SECTION} settings."],
+    )
+
+
+def command_failed() -> str:
+    return system_reply("That command failed and was not retried.", ["`help` to see what you can do."])
 
 
 def lane_lost(session: str, *, project: str | None = None, several: bool = False) -> str:

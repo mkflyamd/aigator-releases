@@ -329,8 +329,13 @@ async def _resume(entry: dict, sender_name: str, preview: str) -> str:
         resume_id=entry["session_id"],
     )
     try:
+        labels = record.get("labels")
         result = await generic_agent_routes.resume_suspended(
-            req, entry["pty_id"], clean(sender_name)[:NAME_MAX_CHARS], preview[:PREVIEW_CHARS]
+            req,
+            entry["pty_id"],
+            clean(sender_name)[:NAME_MAX_CHARS],
+            preview[:PREVIEW_CHARS],
+            labels if isinstance(labels, dict) else None,
         )
     except HTTPException as exc:
         raise WakeRefused("failed", f"The agent could not be resumed: {exc.detail}") from exc

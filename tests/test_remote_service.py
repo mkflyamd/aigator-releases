@@ -122,7 +122,7 @@ async def test_start_registers_an_opaque_id_and_keeps_the_vendor_id(svc, host):
 
 async def test_a_project_has_one_lane_and_a_second_start_is_refused(svc, host):
     first = await svc.start(BUDGET, "a")
-    with pytest.raises(RemoteError, match="budget already has a session"):
+    with pytest.raises(RemoteError, match="Already has a session"):
         await svc.start(BUDGET, "b")
     assert host.n == 1
     assert svc.list() == [first]

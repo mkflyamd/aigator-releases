@@ -32,6 +32,10 @@ class FakeHost:
         self.woken = []
         self.wake_error = None
         self.wake_gate = None
+        self.saved_ids = set()
+        self.woke_with = []
+        self.unreachable = False
+        self.suspend_on_deliver = False
 
     async def spawn(self, project, labels=None):
         self.spawn_labels.append(labels)
@@ -50,9 +54,14 @@ class FakeHost:
             raise ProcessExit()
         if self.crash_on_deliver:
             raise RuntimeError("boom")
+        if self.suspend_on_deliver:
+            self.suspend(pty_id)
+            raise HostError("The session exited before it was ready.")
         self.delivered.append((pty_id, text))
 
     async def alive(self, pty_id):
+        if self.unreachable:
+            raise HostError("The terminal host did not answer.")
         return pty_id in self.alive_ids
 
     async def kill(self, pty_id):
@@ -65,8 +74,12 @@ class FakeHost:
     async def sleeping(self, pty_id):
         return pty_id in self.sleeping_ids
 
-    async def wake(self, pty_id, project, labels):
+    async def saved(self, project, vendor_session_id):
+        return vendor_session_id in self.saved_ids
+
+    async def wake(self, pty_id, project, labels, vendor_session_id=None, cancelled=lambda: False):
         self.woken.append((pty_id, project.id, labels))
+        self.woke_with.append((vendor_session_id, cancelled))
         if self.wake_gate is not None:
             await self.wake_gate.wait()
         if self.wake_error is not None:
