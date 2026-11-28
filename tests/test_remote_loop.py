@@ -157,7 +157,7 @@ def test_the_slack_switch_is_an_allowed_config_key():
 async def test_the_slack_loop_follows_only_the_slack_switch(tmp_path, monkeypatch):
     config = {"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}
     monkeypatch.setattr(remote_loop, "load_config", lambda: config)
-    monkeypatch.setattr(remote_loop, "LocalPtyHost", FakeHost)
+    monkeypatch.setattr(remote_loop, "LocalPtyHost", lambda channel: FakeHost())
     channels = {}
     monkeypatch.setattr(remote_loop, "TeamsSelfChat", lambda state: channels.setdefault("teams", PollingChannel(state)))
     monkeypatch.setattr(remote_loop, "SlackSelfDM", lambda state: channels.setdefault("slack", SlackPolling(state)))

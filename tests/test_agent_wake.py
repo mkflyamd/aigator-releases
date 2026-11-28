@@ -30,7 +30,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     monkeypatch.setattr(agent_wake, "_in_flight", set())
     monkeypatch.setattr(agent_wake, "_sent", {})
-    monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(w["live"]))
+    monkeypatch.setattr(terminal, "live_pty_labels", lambda strict=False: dict(w["live"]))
     monkeypatch.setattr(agent_wake, "title_of", lambda project, agent, session: w["titles"].get(session, ""))
 
     async def resume(entry, sender_name, preview):
@@ -534,8 +534,8 @@ async def test_the_audit_file_keeps_only_the_latest_lines(world, monkeypatch):
 def real_resume(monkeypatch):
     calls = {}
 
-    async def resume_suspended(req, pty, woken_by, woken_preview=""):
-        calls.update(req=req, pty=pty, by=woken_by, preview=woken_preview)
+    async def resume_suspended(req, pty, woken_by, woken_preview="", labels=None):
+        calls.update(req=req, pty=pty, by=woken_by, preview=woken_preview, labels=labels)
         if calls.get("raise"):
             raise calls["raise"]
         return {"pty_session_id": pty, "created": True}
@@ -563,6 +563,19 @@ async def test_the_stored_session_is_resumed_under_its_old_terminal_id(real_resu
     assert real_resume["req"].resume_id == TARGET_SESSION and real_resume["req"].agent == "claude"
     assert real_resume["req"].force_new is False
     assert real_resume["by"] == "Turn issues" and real_resume["preview"] == "hello"
+
+
+async def test_a_peer_wake_of_a_remote_lane_resumes_it_with_its_labels_so_it_stays_pinned(real_resume):
+    labels = {"remote_channel": "teams", "remote_short": "budget", "remote_created": "1.0"}
+    entry = entry_for(pty_id())
+    entry["record"]["labels"] = labels
+    await agent_wake._resume(entry, "a peer", "hello")
+    assert real_resume["labels"] == labels
+
+
+async def test_a_plain_terminal_resumes_without_labels(real_resume):
+    await agent_wake._resume(entry_for(pty_id()), "a peer", "hello")
+    assert real_resume["labels"] is None
 
 
 async def test_a_missing_transcript_is_a_failure_not_a_new_session(real_resume, monkeypatch):
@@ -782,6 +795,82 @@ async def test_an_agent_that_opted_out_is_not_woken_or_messaged(world, policy_fi
         await send(target="Live one")
     assert exc.value.code == "opted_out"
     assert world["typed"] == []
+
+
+# --- a person typing in a chat app -------------------------------------------------
+
+
+def test_a_users_own_words_are_tagged_as_the_user_not_another_agent():
+    text = agent_wake.frame("Mayuresh via Teams", "hello" + chr(10) + "there", "user")
+    assert text == "[via remote chat from the user] hello there"
+    assert "another agent" not in text
+
+
+def test_a_users_message_cannot_begin_with_a_command_character_either():
+    assert agent_wake.frame("x", "/clear", "user").startswith("[via remote chat from the user] /clear")
+
+
+async def test_a_users_message_is_typed_with_the_user_tag_without_spending_the_agent_slot(world):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    sender = {"name": "Mayuresh via Teams"}
+    for _ in range(agent_wake.SENDER_LIMIT + 2):
+        result = await agent_wake.deliver_entry(sender, entry, "look at PR 12", spend_slot=False, origin="user")
+        assert result["status"] == "delivered"
+    assert world["typed"][0] == (pid, "[via remote chat from the user] look at PR 12")
+    assert agent_wake._sent == {}
+
+
+async def test_before_type_runs_after_the_agent_is_ready_and_a_refusal_types_nothing(world):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    seen = []
+
+    async def check(pty):
+        seen.append(pty)
+        raise agent_wake.WakeRefused("unsafe_mode", "That agent skips permission prompts.")
+
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, origin="user", before_type=check)
+    assert exc.value.code == "unsafe_mode"
+    assert seen == [pid]
+    assert world["typed"] == []
+    assert agent_wake._in_flight == set()
+
+
+async def test_before_type_runs_for_a_woken_agent_too(world):
+    pid = suspend(world)
+    entry = agent_wake.find_by_pty(pid)
+    seen = []
+
+    async def check(pty):
+        seen.append(pty)
+
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, origin="user", before_type=check)
+    assert seen == [pid]
+    assert [t[1] for t in world["typed"]] == ["[via remote chat from the user] hi"]
+
+
+async def test_the_wait_for_a_busy_running_agent_is_the_callers_to_choose(world, monkeypatch):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    waits = []
+
+    async def wait_ready(pty, timeout):
+        waits.append(timeout)
+
+    monkeypatch.setattr(agent_wake, "_wait_ready", wait_ready)
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, live_wait=12.0)
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False)
+    assert waits == [12.0, agent_wake.LIVE_READY_SECONDS]
+
+
+def test_a_remote_session_is_marked_so_it_is_never_taken_for_a_peer(world):
+    mine = pty_id()
+    world["live"][mine] = {"agent": "claude", "project_id": "demo", "session_id": "s-r", "remote_pinned": "1"}
+    other = go_live(world)
+    assert agent_wake.find_by_pty(mine)["remote_pinned"] is True
+    assert agent_wake.find_by_pty(other)["remote_pinned"] is False
 
 
 # --- the relay's terminal adapter ----------------------------------------------

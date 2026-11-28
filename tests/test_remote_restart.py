@@ -2,6 +2,7 @@
 
 import pytest
 
+import pty_client
 from remote import loop as remote_loop
 from remote.guard import Guard
 from remote.master import Master
@@ -11,7 +12,7 @@ from remote.service import RemoteService
 from remote.session_host import HostError, LocalPtyHost, Project, RestoredSession
 from remote.state import State
 from routes import terminal
-from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost, World
+from tests.test_remote_runner import BUDGET, OTHER, Clock, FakeChannel, FakeHost, World
 
 
 class LabelledHost(FakeHost):
@@ -47,7 +48,7 @@ class Restartable(World):
     def build(self):
         self.guard = Guard(clock=self.clock)
         self.service = RemoteService(
-            self.host, default_project=lambda: BUDGET, clock=self.clock, channel="teams"
+            self.host, default_project=lambda: BUDGET, clock=self.clock, channel="teams", state=self.state
         )
         self.channel = FakeChannel(self.state)
         self.runner = RemoteRunner(self.channel, self.service, self.guard, self.state, clock=self.clock, stale_seconds=900)
@@ -75,14 +76,13 @@ async def test_a_session_survives_a_restart_with_its_name_and_takes_a_named_send
 
 async def test_a_restored_session_keeps_its_stable_name_when_an_earlier_one_was_stopped(w):
     session_a = await w.service.start(BUDGET, "a")
-    session_b = await w.service.start(BUDGET, "b")
-    assert session_b.short == "budget-2"
+    session_b = await w.service.start(OTHER, "b")
     await w.service.stop(session_a.id)
     w.restart()
     await w.service.restore()
-    assert [s.short for s in w.service.list()] == ["budget-2"]
-    assert w.service.resolve("budget-2").pty_id == session_b.pty_id
-    assert w.service.resolve("budget-2").vendor_session_id == "vendor-2"
+    assert [s.short for s in w.service.list()] == ["other"]
+    assert w.service.resolve("other").pty_id == session_b.pty_id
+    assert w.service.resolve("other").vendor_session_id == "vendor-2"
 
 
 async def test_sessions_that_are_done_are_not_restored(w):
@@ -141,7 +141,7 @@ class _Terminal:
 
     def host_sessions(self):
         if self.unreachable:
-            raise terminal.HostUnreachable("down")
+            raise pty_client.HostError("down")
         return self.listed
 
 
@@ -209,7 +209,7 @@ def test_a_running_host_that_does_not_answer_is_unreachable_not_empty(monkeypatc
     monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
     monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
     monkeypatch.setattr(terminal.pty_client, "host_process_running", lambda key: True)
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(pty_client.HostError):
         terminal.host_sessions()
     assert terminal._list_host_sessions() == []
 

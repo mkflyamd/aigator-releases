@@ -43,10 +43,23 @@ Owns headless sessions. A remote session is a PTY registered in `web/routes/term
 - Session ids are opaque (`pty:<uuid>`), and the vendor session id (Claude, Crush, Codex, OpenCode) is stored beside each one, so a session can be resumed with `agent_sessions.find_session` after a backend restart. Several agents can run per project.
 - Internal event bus names events by A2A task state: `submitted`/`working` (agent started or busy), `input-required` (agent is asking the user), `completed` (the agent finished that turn), `failed` or `canceled` (process exited or was stopped). The command layer subscribes to post replies.
 - `SessionHost` and `LocalPtyHost` live in their own module (`web/remote/session_host.py`), so the cross-agent relay's terminal adapter can wrap them later.
-- Pinned sessions are exempt from the viewer-based reaper. A pinned session ends on `stop`, process exit, or after `remote_session_idle_hours` (default 8) with no input or output.
+- Pinned sessions are exempt from the viewer-based reaper. A pinned session ends on `stop`, process exit, or after `remote_session_idle_hours` (default 8) with no input or output while it is running. A sleeping lane is not running, so the idle limit never applies to it. The idle-suspend sweep treats them like any other agent terminal (see Lanes).
+- A pinned remote terminal is never the project's tracked session, so a local cold open of the project does not reattach to it.
 - Opening the Code tab on a pinned session attaches to it and replays `output_buf`, as it does today.
 - Restart survival: the PTY host keeps the PTYs running when the backend restarts. At spawn each remote session is labelled on the host with its channel, short name and start time, beside the existing `remote_pinned`, `project_id` and vendor `session_id` labels. After a restart the service rebuilds its sessions from those labels, keeping those of its own channel whose project still exists and whose process has not exited, and the command layer waits for that before running any command. If the host does not answer, nothing is rebuilt and the next poll tries again; this is reported as a host error, never as "no sessions".
 - Closing a terminal in the Code tab is refused with an error, and the session left open, when the host cannot be asked whether the terminal is a remote session.
+
+#### Lanes
+
+A project has one lane: its one remote session, never two. A lane is stored in `remote_control_state.json` (project id, vendor session id, short name, last activity, state) and survives a backend restart. Its state is `live`, `sleeping` or `failed`.
+
+- The idle-suspend sweep (`web/agent_suspend.py`) suspends an idle remote terminal like any other: it saves the session id, then closes the process. The lane turns `sleeping`; `list` and `status` say so, and the tick never posts "The agent process exited." for it.
+- The next `@gator` message to a sleeping lane answers at once ("Waking up") and wakes the session by its own id through the same resume path as wake-on-ping, in a background task, so polling never waits. A lane wakes at most once at a time and not again within 30 seconds of a failed wake; a message that arrives while it wakes gets a short "still waking" reply and is not queued. The message is typed once the session takes input. The arm cap and idle expiry apply as for any command: nothing wakes while remote control is off, and a wake that finishes after remote control was turned off sends nothing.
+- A wake never starts a fresh session. A failure is reported in the chat and the lane stays asleep to retry. A failure that cannot clear (the stored session or its project is gone) marks the lane `failed`; `stop <name>` clears it, and the next message then starts a new session.
+- A session that is live in another terminal (for example resumed in the Code tab), or that someone is typing in or has open in AI Gator, is not woken or typed at; the chat gets a clear reply instead. Two processes never share one session id.
+- After a restart, a newer running terminal for a project never replaces a lane that still has a saved session: the lane is kept, marked `failed`, and one line says so; `stop <name>` clears it. A lane with nothing saved is replaced by the running terminal.
+- Claude asks how to resume a large old session (from a summary or in full) before it takes input. Only the dialog's two numbered choices count as that prompt; the same words in prose do not. That prompt is never answered for the user: the terminal is closed again, the lane stays asleep, and the chat says to resume the session once from the Code tab and choose there.
+- `stop` and `stop all` close the lane cleanly, sleeping or failed ones included: the saved record is dropped, so nothing is left to resume. Idle expiry closes live lanes only. A sleeping or failed lane stays until `stop`, until remote control is turned off, or until the master switch runs out. Stopping a lane that is waking waits for the wake to end and then closes whatever came up.
 
 `SessionHost` is the interface the service calls for spawn, write, read-output, kill and liveness. `LocalPtyHost` wraps the existing PTY registry. A later server tier adds another host without touching the service or API.
 
@@ -167,12 +180,12 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and two limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
 
 - `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
 - "Reply in my own chat" sits directly under the channel switches and shows "Replies to your own Teams and Slack chat are off until you turn this on." while it is off. It is the user's own auto-send switch, saved through `POST /api/relay/self-chat-autosend` and read from `GET /api/relay`; it is the same setting as "Allow posting to my own Teams and Slack chat" under Agent messaging, and the two stay in step. If the administrator's policy is not `allow`, it is shown off and disabled with "Your administrator has turned this off."
 - `remote_default_project`: chosen from a dropdown of existing projects, or left on "Active project". A name that is not a project is rejected on save. If the chosen project is later deleted, a command that needs it is refused with `[🐊 Gator] The default project "X" no longer exists. Choose another in Settings, then resend.` and does not fall back to the active project.
-- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
+- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_peer_messages_per_hour` (default 30, whole number 0 to 1000; 0 means no limit; see Messaging other agents). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
 
 ## Compatibility with the current `/code` path
 
@@ -189,11 +202,12 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 1. With Gator running, the auto-send switch on, the Code tab closed and the screen locked, `@gator what is open?` in the Teams self-chat produces a `[🐊 Gator - {project}]` reply with the agent's answer in the same chat.
 2. The same works from the Slack self-DM.
 3. `@gator list`, `@gator status`, `@gator stop` and `@gator <name> <text>` work from both channels.
-4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit.
+4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit while it is running.
 5. A message sent while Gator was off is run once if newer than 15 minutes and skipped with a notice otherwise. A Gator restart never runs the same message twice.
 6. Gator posts only into the user's own self-chat, verified before each post and only while the auto-send gate is on, and its own posts never trigger a command, by prefix and by recorded message id.
    6a. A remote session survives a backend restart. `@gator list` shows it under the same short name and `@gator <name> <text>` reaches it. Sessions that have exited are dropped.
    6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
+   6c. An idle remote session is suspended to free memory and the next `@gator` message wakes it by session id, with an immediate acknowledgement, without starting a second session and without blocking the polling loop. `list` and `status` show it as sleeping.
 7. Every new mutating route uses `verify_csrf`, and `tests/test_csrf_route_inventory.py` passes with no baseline changes.
 8. Opening the Code tab later attaches to the live session and shows its recent output.
 9. The existing `/code` OpenCode path still works until slice 1 lands.
@@ -201,6 +215,23 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 ## Out of scope
 
 Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agents, bot-style channels, push notifications of our own, widget and dashboard sharing, agent memory or cached results over remote channels, remote approvals of agent permission prompts beyond forwarding the question text.
+
+## Messaging other agents
+
+`@gator <name> <text>` reaches another agent session in the default project, such as a session working in a branch or a review session, live or suspended. `@gator list` shows them under the sessions Remote started, at most 8 with "N more". The tag is required: a message to a peer without `@gator` is never routed, and the window does not stick to a peer.
+
+- Reachable means: same project as the default project, not started by Remote, and not opted out in Relay. No per-session opt-in. Other projects are not reachable. When the administrator or user messaging switch is off, a message to an agent is refused with that reason.
+- The name is matched exactly (case-insensitive) against the session title, or the full or 8-character session id. `gator`, `all` and the command words are reserved and never match a peer. Two peers with the same name get a reply listing the 8-character ids to use instead.
+- The text is typed into the peer as the user's own words, prefixed `[via remote chat from the user]`, through the wake-on-ping path: a suspended session is woken first, nothing is typed at a permission prompt, while the user is typing, or when the session is in a permission mode that skips approvals (bypass or auto-accept). A permission mode that cannot be read is treated as one that skips approvals.
+- Sends are counted per peer per hour against `remote_peer_messages_per_hour`, separately from Relay's agent-to-agent limit, which a person typing in chat does not use. Each delivery is written to the same audit log as agent messages.
+
+### Replies from another agent
+
+After a message is delivered, Remote watches that session for one answer and posts it back to the chat as `[🐊 <name> - <project>] <reply>`, under the agent's own name rather than Gator's. A peer whose name is the agent's own name is shown as `<name> (other agent)`. Only the turn that follows the message is posted: the agent's earlier turns and its own idle events are not. A question the agent asks is posted with its name and how to answer it (`@gator <name> <answer>`). If the session closes before answering, the chat is told once.
+
+- The reply is read through the same redaction as Remote's own replies and trimmed at the same length. The name is shown on one line with brackets replaced, so it cannot end the prefix early.
+- The prefix starts with the crocodile marker, so the loop guard ignores it and a reply can never start a command.
+- Watching is not owning. The session is held apart from the ones Remote started: it does not appear in `list` as a Remote session, `stop` and `stop all` never reach it, the idle limit only stops watching, and the terminal host refuses to close any session that was not started by this channel. A backend restart forgets what was being watched.
 
 ## Chat tabs
 

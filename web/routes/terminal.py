@@ -115,33 +115,29 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
-class HostUnreachable(Exception):
-    """The PTY host is running but did not answer, so what it holds is unknown."""
-
-
 def _list_host_sessions(strict: bool = False) -> list[dict]:
     """Sessions the host holds. A host that is off, or that never ran, holds none. A
     host that does not answer yields none too, unless `strict`, which raises
-    HostUnreachable so a caller can tell "no sessions" from "could not ask"."""
+    pty_client.HostError so a caller can tell "no sessions" from "could not ask"."""
     if not pty_client.host_enabled():
         return []
     key = pty_client.instance_key()
     info = pty_client.find_host(key)
     if info is None:
         if strict and pty_client.host_process_running(key):
-            raise HostUnreachable("the PTY host did not answer")
+            raise pty_client.HostError("the PTY host did not answer")
         return []
     try:
         return pty_client.host_request(info, {"op": "list"}).get("sessions", [])
     except pty_client.HostError:
         logger.warning("could not ask the PTY host for sessions", exc_info=True)
         if strict:
-            raise HostUnreachable("the PTY host did not answer") from None
+            raise pty_client.HostError("the PTY host did not answer") from None
         return []
 
 
 def host_sessions() -> list[dict]:
-    """Every session the PTY host holds. Raises HostUnreachable when the host does not
+    """Every session the PTY host holds. Raises pty_client.HostError when the host does not
     answer. Blocking."""
     return _list_host_sessions(strict=True)
 
@@ -158,7 +154,7 @@ def session_owner(session_id: str, strict: bool = False) -> dict[str, str] | Non
     """The project and agent labels a session was created with, or None when they
     are unknown. A session this backend created carries them; one adopted from the
     PTY host after a restart is looked up there. With `strict`, a host that does
-    not answer raises HostUnreachable instead of reading as "no labels".
+    not answer raises pty_client.HostError instead of reading as "no labels".
     Blocking (loopback socket)."""
     meta = getattr(_pty_sessions.get(session_id), "meta", None)
     return meta or host_session_labels(session_id, strict) or None
@@ -252,10 +248,12 @@ def create_pty_session(
     return entry
 
 
-def live_pty_labels() -> dict[str, dict]:
+def live_pty_labels(strict: bool = False) -> dict[str, dict]:
     """id -> labels for every live PTY: those the PTY host holds (including ones
-    this backend has not adopted since a restart) and in-process ones. Blocking."""
-    found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions() if not s.get("done")}
+    this backend has not adopted since a restart) and in-process ones. With `strict`,
+    a host that does not answer raises pty_client.HostError instead of reading as "none".
+    Blocking."""
+    found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions(strict) if not s.get("done")}
     for session_id, entry in list(_pty_sessions.items()):
         if not entry.done and session_id not in found:
             found[session_id] = entry.meta or {}
@@ -299,6 +297,22 @@ def is_pty_alive(session_id: str) -> bool:
     'terminal actually on-screen' signal."""
     entry = get_pty_session(session_id)
     if not entry or entry.done:
+        return False
+    try:
+        return bool(entry.isalive())
+    except Exception:
+        return False
+
+
+def pty_alive_strict(session_id: str) -> bool:
+    """is_pty_alive that never guesses: the PTY host is asked, and one that does not answer
+    raises pty_client.HostError instead of reading as "not running". An in-process PTY (no host
+    behind it) is judged locally. Blocking."""
+    for s in _list_host_sessions(strict=True):
+        if s["id"] == session_id:
+            return not s.get("done")
+    entry = _pty_sessions.get(session_id)
+    if entry is None or isinstance(entry.pty, pty_client.RemotePty) or entry.done:
         return False
     try:
         return bool(entry.isalive())

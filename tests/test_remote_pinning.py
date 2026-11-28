@@ -1,4 +1,5 @@
-"""Remote sessions are pinned: the idle-suspend sweep never takes them."""
+"""Remote sessions are pinned: a Code tab closing never ends them. The idle sweep suspends them like
+any other terminal, and they are never the project's tracked session."""
 
 import uuid
 
@@ -32,7 +33,7 @@ async def test_open_pinned_terminal_labels_the_pty_as_remote_pinned(monkeypatch)
     assert spawned[-1]["meta"]["project_id"] == "demo"
 
 
-def test_pinned_idle_terminal_is_never_chosen_for_suspend():
+def test_a_pinned_idle_terminal_is_suspended_like_any_other():
     pinned, normal = str(uuid.uuid4()), str(uuid.uuid4())
     live = {
         pinned: {"project_id": "demo", "agent": "claude", "session_id": "s1", "remote_pinned": "1"},
@@ -40,7 +41,7 @@ def test_pinned_idle_terminal_is_never_chosen_for_suspend():
     }
     states = {p: {"state": "idle", "at": NOW - IDLE - 1} for p in live}
     since = {p: NOW - IDLE - 60 for p in live}
-    assert agent_suspend.choose(live, states, set(), since, NOW) == [normal]
+    assert sorted(agent_suspend.choose(live, states, set(), since, NOW)) == sorted([pinned, normal])
 
 
 class _Registered:
@@ -146,7 +147,68 @@ def test_session_owner_tells_a_silent_host_from_a_host_with_no_labels(monkeypatc
 
     monkeypatch.setattr(terminal.pty_client, "host_request", silent)
     assert terminal.session_owner("pty-9") is None
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(terminal.pty_client.HostError):
         terminal.session_owner("pty-9", strict=True)
     monkeypatch.setattr(terminal.pty_client, "host_request", lambda info, request: {"sessions": [{"id": "pty-9"}]})
     assert terminal.session_owner("pty-9", strict=True) is None
+
+
+def _spawn_fakes(monkeypatch):
+    import routes.terminal as terminal
+
+    spawned = []
+    monkeypatch.setattr(terminal, "create_pty_session", lambda sid, **kw: spawned.append({"sid": sid, **kw}))
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: (None, {}))
+    monkeypatch.setattr(generic_agent, "effective_binding", lambda agent: None)
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo, extra=(): ["C:\bin\claude.exe"])
+    monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    return spawned
+
+
+async def test_a_pinned_remote_terminal_is_never_the_projects_tracked_session(monkeypatch):
+    _spawn_fakes(monkeypatch)
+    req = generic_agent_routes.GenericAgentTerminalRequest(
+        agent="claude", project_id="demo", repo_path="C:/work/app", force_new=True
+    )
+    await generic_agent_routes.open_pinned_terminal(req)
+    assert generic_agent.get_active_session("demo", "claude") is None
+
+
+async def test_an_ordinary_terminal_is_still_the_projects_tracked_session(monkeypatch):
+    _spawn_fakes(monkeypatch)
+    req = generic_agent_routes.GenericAgentTerminalRequest(
+        agent="claude", project_id="demo", repo_path="C:/work/app", force_new=True
+    )
+    result = await generic_agent_routes._open_terminal(req)
+    assert generic_agent.get_active_session("demo", "claude") == result["pty_session_id"]
+
+
+async def test_resuming_a_suspended_lane_keeps_it_pinned_with_its_labels(monkeypatch):
+    seen = {}
+
+    async def fake_open(req, **kw):
+        seen.update(kw)
+        return {"pty_session_id": kw["reuse_pty_id"], "created": True}
+
+    monkeypatch.setattr(generic_agent_routes, "_open_terminal", fake_open)
+    req = generic_agent_routes.GenericAgentTerminalRequest(agent="claude", project_id="demo", repo_path="C:/work/app")
+    labels = {"remote_channel": "teams", "remote_short": "demo"}
+    await generic_agent_routes.resume_suspended(req, "pty-1", "Remote control", "", labels)
+    assert seen["pinned"] is True
+    assert seen["extra_labels"] == labels
+    assert seen["reuse_pty_id"] == "pty-1"
+
+
+async def test_resuming_a_suspended_terminal_without_labels_stays_ordinary(monkeypatch):
+    seen = {}
+
+    async def fake_open(req, **kw):
+        seen.update(kw)
+        return {"pty_session_id": kw["reuse_pty_id"], "created": True}
+
+    monkeypatch.setattr(generic_agent_routes, "_open_terminal", fake_open)
+    req = generic_agent_routes.GenericAgentTerminalRequest(agent="claude", project_id="demo", repo_path="C:/work/app")
+    await generic_agent_routes.resume_suspended(req, "pty-1", "someone")
+    assert seen["pinned"] is False

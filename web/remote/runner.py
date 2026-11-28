@@ -7,6 +7,7 @@ never runs a message twice."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from dataclasses import dataclass
@@ -16,8 +17,20 @@ from remote import commands, prompts
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote import master as master_window
 from remote.guard import Guard, limit
+from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
 from remote.master import Master
-from remote.service import Event, PromptGone, PromptRefused, RemoteError, RemoteService, Session
+from remote.service import (
+    ADOPTED,
+    Aborted,
+    Asleep,
+    Event,
+    PromptGone,
+    PromptRefused,
+    Refusal,
+    RemoteError,
+    RemoteService,
+    Session,
+)
 from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
@@ -27,14 +40,11 @@ _log = logging.getLogger(__name__)
 
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
-WAITING_HEADLINE = "Waiting for your answer."
+WAITING_HEADLINE = commands.WAITING_HEADLINE
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
 PROMPT_HOLD_SECONDS = 2 * 3600.0
 _TAGS = ("gator", AGENT_LABEL.lower())
-
-
-class _Reply(RemoteError):
-    """A RemoteError whose text is already a finished chat message."""
+_RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
 
 @dataclass
@@ -47,6 +57,8 @@ class _Turn:
 
 
 def _state_word(session: Session) -> str:
+    if session.state in (commands.SLEEPING, commands.FAILED):
+        return session.state
     if session.waiting:
         return commands.WAITING
     return commands.WORKING if session.awaiting_since is not None else commands.IDLE
@@ -64,6 +76,7 @@ class RemoteRunner:
         master: Master | None = None,
         first_prompt_hint: str = "",
         branch_of: Callable[[str], str | None] = current_branch,
+        peers: PeerDirectory | None = None,
     ):
         self._channel = channel
         self._service = service
@@ -74,6 +87,7 @@ class RemoteRunner:
         self._master = master or Master(state, clock)
         self._hint = first_prompt_hint
         self._branch_of = branch_of
+        self._peers = peers
         self._turns: dict[str, _Turn] = {}
         self._holds: dict[str, tuple[str, float]] = {}
         self._enabled = False
@@ -82,6 +96,7 @@ class RemoteRunner:
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
         self._not_sent_noticed: set[str] = set()
+        self._wakes: set[asyncio.Task] = set()
         self._not_armed_noticed = False
         service.subscribe(self._on_event)
 
@@ -103,6 +118,7 @@ class RemoteRunner:
             self._guard.arm()
         else:
             self._guard.disarm()
+            self._service.abort_wakes()
 
     @property
     def live(self) -> bool:
@@ -115,6 +131,14 @@ class RemoteRunner:
 
     async def restore(self) -> None:
         await self._service.restore()
+
+    async def shutdown(self) -> None:
+        """Ends the background wakes before the backend goes down."""
+        self._service.abort_wakes()
+        tasks = list(self._wakes)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def announce_online(self) -> None:
         """Its text is about opening a chat, so it is not said into one that is already open."""
@@ -188,7 +212,8 @@ class RemoteRunner:
         if len(text) > commands.UNTAGGED_MAX_CHARS:
             await self._note_not_sent(message, "too long", commands.too_long)
             return None
-        return commands.parse(f"@gator {text}")
+        command = commands.parse(f"@gator {text}")
+        return dataclasses.replace(command, tagged=False) if command else None
 
     async def _note_not_armed(self, message: InboundMessage) -> None:
         """A switch that is on with no window ever opened (an upgrade, or after Disarm) gets one
@@ -242,13 +267,13 @@ class RemoteRunner:
             return
         try:
             await self._dispatch(command)
-        except _Reply as exc:
+        except Refusal as exc:
             await self._post(str(exc))
         except RemoteError as exc:
             await self._post(commands.error_reply(str(exc)))
         except Exception:
             _log.warning("Remote command %s failed", command.kind, exc_info=True)
-            await self._post(commands.error_reply("That command failed and was not retried."))
+            await self._post(commands.command_failed())
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
@@ -260,7 +285,7 @@ class RemoteRunner:
             self._window.close()
             await self._post(commands.chat_closed_bye())
         elif kind == "list":
-            await self._post(self._describe(self._service.list()))
+            await self._post(await self._list_text())
         elif kind == "status":
             await self._post(self._status(command.name))
         elif kind == "stop":
@@ -268,7 +293,7 @@ class RemoteRunner:
         elif kind == "stop_all":
             await self._stop_all()
         else:
-            await self._send(command.text)
+            await self._send(command.text, command.tagged)
 
     async def _stop_all(self) -> None:
         stopped, failed = await self._service.stop_all()
@@ -288,13 +313,13 @@ class RemoteRunner:
         if name:
             session = self._service.resolve(name)
             if session is None:
-                raise _Reply(commands.session_not_found(name))
+                raise Refusal(commands.session_not_found(name))
             return [session]
         sessions = self._service.list()
         if required and len(sessions) != 1:
             if not sessions:
-                raise _Reply(commands.no_sessions())
-            raise _Reply(commands.which_to_stop([s.short for s in sessions]))
+                raise Refusal(commands.no_sessions())
+            raise Refusal(commands.which_to_stop([s.short for s in sessions]))
         return sessions
 
     def _since(self, session: Session) -> float:
@@ -302,14 +327,92 @@ class RemoteRunner:
             return session.last_event_at or session.last_activity
         return session.awaiting_since if session.awaiting_since is not None else session.last_activity
 
-    def _describe(self, sessions: list[Session]) -> str:
-        now = self._clock()
+    def _reserved(self) -> frozenset[str]:
+        return _RESERVED_NAMES | {s.short for s in self._service.list()}
+
+    async def _peer_list(self, *, refresh: bool = False) -> list[Peer]:
+        """The other agents in the default project that can be messaged. A listing that fails is no
+        reason to refuse a command that is not about them."""
+        if self._peers is None:
+            return []
+        try:
+            project = self._service.default_project()
+            if project is None:
+                return []
+            exclude = {s.pty_id for s in self._service.list()}
+            return await self._peers.peers(project.id, exclude, refresh=refresh)
+        except Exception as exc:
+            _log.warning("Remote control could not list the other agents: %s", exc)
+            return []
+
+    async def _list_text(self) -> str:
+        peers = await self._peer_list(refresh=True)
+        reserved = self._reserved()
+        names = [p.name.casefold() for p in peers]
+        rows, reach = [], ""
+        for peer in peers[: commands.PEERS_SHOWN]:
+            by_name = addressable(peer, reserved) and names.count(peer.name.casefold()) == 1
+            token = peer.name if by_name else peer.short
+            reach = reach or token
+            shown = commands.peer_label(peer.name) if by_name else f"{commands.peer_label(peer.name)} ({peer.short})"
+            rows.append((shown, peer.state))
         return commands.session_list(
-            [
-                (s.short, s.project.name, _state_word(s), now - self._since(s), prompts.answer_word(s.prompt))
-                for s in sessions
-            ]
+            self._session_rows(self._service.list()),
+            rows,
+            max(0, len(peers) - commands.PEERS_SHOWN),
+            reach,
         )
+
+    async def _try_peer(self, text: str, colon_only: bool = False) -> bool:
+        """Sends `text` to the other agent its first words name. False when they name none."""
+        peers = await self._peer_list()
+        found = resolve_peer(peers, text, self._reserved(), colon_only) if peers else None
+        if found is None:
+            return False
+        if found.peer is None:
+            first = found.candidates[0]
+            await self._audit_refusal(first.name, "ambiguous_name", "Several agents share that name.", text)
+            raise Refusal(commands.peer_ambiguous(first.name, [(p.short, p.state) for p in found.candidates]))
+        await self._message_peer(found.peer, found.text)
+        return True
+
+    async def _audit_refusal(self, peer_name: str, code: str, reason: str, text: str) -> None:
+        import agent_wake
+
+        sender = {"name": f"{self._channel.name.title()} chat"}
+        try:
+            await asyncio.to_thread(agent_wake.audit_refusal, sender, peer_name, code, reason, text)
+        except Exception:
+            _log.warning("could not audit a refused message to %s", peer_name, exc_info=True)
+
+    async def _message_peer(self, peer: Peer, text: str) -> None:
+        if not text:
+            raise Refusal(commands.mention_needs_text(commands.peer_label(peer.name)))
+        wait = self._peers.limiter.wait_seconds(peer.session_id)
+        if wait:
+            await self._audit_refusal(peer.name, "peer_limit", "The hourly limit for that agent was reached.", text)
+            raise Refusal(commands.peer_limit(peer.name, self._peers.limiter.limit, wait))
+        try:
+            delivery = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
+        except PeerRefused as exc:
+            raise Refusal(commands.peer_refused(peer.name, exc.reason)) from exc
+        project = self._service.default_project()
+        if project is not None:
+            try:
+                self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
+            except RemoteError:
+                _log.warning("could not watch %s for its reply; the message was delivered", peer.name)
+        await self._post(commands.peer_sent(peer.name, delivery.woke))
+
+    def _session_rows(self, sessions: list[Session]) -> list[tuple[str, str, str, float, str]]:
+        now = self._clock()
+        return [
+            (s.short, s.project.name, _state_word(s), now - self._since(s), prompts.answer_word(s.prompt))
+            for s in sessions
+        ]
+
+    def _describe(self, sessions: list[Session]) -> str:
+        return commands.session_list(self._session_rows(sessions))
 
     def _status(self, name: str | None) -> str:
         sessions = self._pick(name)
@@ -322,22 +425,25 @@ class RemoteRunner:
             s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
         )
 
-    async def _send(self, text: str) -> None:
+    async def _send(self, text: str, tagged: bool = True) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
         waiting session if exactly one waits, else the only running one, else a new session in the
-        default project."""
+        default project. Another agent in the project is reached by its name, and only when the message
+        carries the `@gator` tag: an open chat window never routes to one."""
         mention = commands.LEADING_MENTION_RE.match(text)
         if mention:
             name, rest = mention.group(1), (mention.group(2) or "").strip()
             session = self._service.resolve(name)
             if session is not None:
                 if not rest:
-                    raise _Reply(commands.mention_needs_text(session.short))
+                    raise Refusal(commands.mention_needs_text(session.short))
                 await self._deliver(session, rest)
                 return
             if name.lower() not in _TAGS:
+                if tagged and await self._try_peer(text):
+                    return
                 recent = sorted(self._service.list(), key=lambda s: s.last_activity, reverse=True)
-                raise _Reply(commands.unknown_mention(name, [s.short for s in recent]))
+                raise Refusal(commands.unknown_mention(name, [s.short for s in recent]))
             if not rest:
                 await self._post(commands.help_text(self._window.is_open()))
                 return
@@ -349,25 +455,40 @@ class RemoteRunner:
             return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
+        # A waiting session is being answered: the answer may start with a peer's name, so only
+        # `name: text` reaches the peer then.
+        if tagged and await self._try_peer(text, colon_only=bool(waiting)):
+            return
         if len(waiting) == 1:
             await self._deliver(waiting[0], text)
         elif len(sessions) == 1:
             await self._deliver(sessions[0], text)
         elif sessions:
-            raise _Reply(commands.which_session([s.short for s in sessions]))
+            raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
             project = self._service.default_project()
             if project is None:
-                raise RemoteError("No default project is set. Choose one in Settings, then resend.")
+                raise Refusal(commands.no_default_project())
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
     async def _deliver(self, session: Session, text: str) -> None:
+        if await self._service.needs_wake(session):
+            await self._start_wake(session, text)
+            return
         await self._service.refresh(session.id)
         if session.waiting and session.prompt is not None:
             await self._answer(session, text)
             return
-        await self._service.send(session.id, text)
+        try:
+            await self._service.send(session.id, text)
+        except Asleep:
+            await self._start_wake(session, text)
+            return
+        except Refusal:
+            raise
+        except RemoteError as exc:
+            raise Refusal(self._lane_copy(commands.send_failed, session, str(exc))) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
 
@@ -378,10 +499,10 @@ class RemoteRunner:
         try:
             result = await self._service.answer(session.id, text)
         except PromptRefused as exc:
-            raise _Reply(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
+            raise Refusal(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
         except PromptGone as exc:
             self._state.clear_prompt_messages(self._channel.name, session.id)
-            raise _Reply(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED)) from exc
+            raise Refusal(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED)) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
         if not result.ends_turn:
             self._begin(session)
@@ -396,11 +517,62 @@ class RemoteRunner:
                 self._channel.name, message_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
             )
 
+    async def _start_wake(self, session: Session, text: str) -> None:
+        """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
+        must keep running. begin_wake refuses a second wake of the same lane and one too soon after
+        a failure, so a burst of messages cannot start more than one."""
+        self._service.begin_wake(session)
+        await self._post(self._lane_copy(commands.waking, session))
+        task = asyncio.create_task(self._wake(session, text))
+        self._service.attach_wake(session, task)
+        self._wakes.add(task)
+        task.add_done_callback(self._wakes.discard)
+
+    async def _wake(self, session: Session, text: str) -> None:
+        try:
+            await self._service.wake(session, text, proceed=lambda: self._guard.armed)
+        except Aborted:
+            return
+        except RemoteError as exc:
+            if session.stopping:
+                return
+            await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
+        except Exception:
+            _log.warning("Remote wake of %s failed", session.short, exc_info=True)
+            if session.stopping:
+                return
+            await self._post(self._lane_copy(commands.wake_failed, session))
+        else:
+            self._begin(session)
+
     def _begin(self, session: Session) -> None:
         now = self._clock()
         self._turns[session.id] = _Turn(started=now, last_note=now)
 
+    def _peer_ref(self, session: Session) -> str:
+        """What to type to reach a watched agent: its name when a name picks it, else its id."""
+        entry = {"session_id": session.vendor_session_id or "", "title": session.name}
+        peer = Peer(entry)
+        if peer.session_id and not addressable(peer, self._reserved()):
+            return peer.short
+        return commands.peer_label(session.name)
+
+    async def _on_peer_event(self, event: Event) -> None:
+        """What another agent answered to a message sent from chat, or that it closed before answering."""
+        session = event.session
+        project = session.project.name
+        if event.kind in ("completed", "input-required"):
+            waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
+            session.waiting = waiting
+            ref = self._peer_ref(session)
+            await self._post(commands.peer_result(session.name, project, event.text, waiting, ref))
+        elif event.kind == "detached" and event.text:
+            await self._post(commands.peer_exited(session.name, project))
+
     async def _on_event(self, event: Event) -> None:
+        if event.session.kind == ADOPTED:
+            await self._on_peer_event(event)
+            return
         session = event.session
         turn = self._turns.pop(session.id, None)
         if not self.live:
@@ -429,12 +601,20 @@ class RemoteRunner:
             await self._post(commands.agent_exited(short, project=project, several=several))
         elif event.kind == "canceled":
             await self._post(commands.agent_stopped(short, project=project, several=several))
+        elif event.kind == "lost":
+            await self._post(commands.lane_lost(short, project=project, several=several))
+        elif event.kind == "replaced":
+            await self._post(commands.lane_replaced(short, project=project, several=several))
+        elif event.kind == "duplicate":
+            await self._post(commands.duplicate_lane(short, project=project, several=several))
         else:
             await self._post(commands.working_ack(short, event.kind, project=project, several=several))
 
+    def _lane_copy(self, build, session: Session, *args, **kwargs) -> str:
+        return build(session.short, *args, project=session.project.name, several=self._several(session), **kwargs)
+
     def _several(self, session: Session) -> bool:
-        """True while more than one session is live, counting one that has just left the table."""
-        return len({s.id for s in self._service.list()} | {session.id}) > 1
+        return self._service.several(session)
 
     async def _report_progress(self) -> None:
         """A turn that outlives ACK_DELAY_SECONDS gets one 'Working on it', then 'Still working' every
