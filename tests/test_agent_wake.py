@@ -784,6 +784,82 @@ async def test_an_agent_that_opted_out_is_not_woken_or_messaged(world, policy_fi
     assert world["typed"] == []
 
 
+# --- a person typing in a chat app -------------------------------------------------
+
+
+def test_a_users_own_words_are_tagged_as_the_user_not_another_agent():
+    text = agent_wake.frame("Mayuresh via Teams", "hello" + chr(10) + "there", "user")
+    assert text == "[via remote chat from the user] hello there"
+    assert "another agent" not in text
+
+
+def test_a_users_message_cannot_begin_with_a_command_character_either():
+    assert agent_wake.frame("x", "/clear", "user").startswith("[via remote chat from the user] /clear")
+
+
+async def test_a_users_message_is_typed_with_the_user_tag_without_spending_the_agent_slot(world):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    sender = {"name": "Mayuresh via Teams"}
+    for _ in range(agent_wake.SENDER_LIMIT + 2):
+        result = await agent_wake.deliver_entry(sender, entry, "look at PR 12", spend_slot=False, origin="user")
+        assert result["status"] == "delivered"
+    assert world["typed"][0] == (pid, "[via remote chat from the user] look at PR 12")
+    assert agent_wake._sent == {}
+
+
+async def test_before_type_runs_after_the_agent_is_ready_and_a_refusal_types_nothing(world):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    seen = []
+
+    async def check(pty):
+        seen.append(pty)
+        raise agent_wake.WakeRefused("unsafe_mode", "That agent skips permission prompts.")
+
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, origin="user", before_type=check)
+    assert exc.value.code == "unsafe_mode"
+    assert seen == [pid]
+    assert world["typed"] == []
+    assert agent_wake._in_flight == set()
+
+
+async def test_before_type_runs_for_a_woken_agent_too(world):
+    pid = suspend(world)
+    entry = agent_wake.find_by_pty(pid)
+    seen = []
+
+    async def check(pty):
+        seen.append(pty)
+
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, origin="user", before_type=check)
+    assert seen == [pid]
+    assert [t[1] for t in world["typed"]] == ["[via remote chat from the user] hi"]
+
+
+async def test_the_wait_for_a_busy_running_agent_is_the_callers_to_choose(world, monkeypatch):
+    pid = go_live(world)
+    entry = agent_wake.find_by_pty(pid)
+    waits = []
+
+    async def wait_ready(pty, timeout):
+        waits.append(timeout)
+
+    monkeypatch.setattr(agent_wake, "_wait_ready", wait_ready)
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False, live_wait=12.0)
+    await agent_wake.deliver_entry({"name": "x"}, entry, "hi", spend_slot=False)
+    assert waits == [12.0, agent_wake.LIVE_READY_SECONDS]
+
+
+def test_a_remote_session_is_marked_so_it_is_never_taken_for_a_peer(world):
+    mine = pty_id()
+    world["live"][mine] = {"agent": "claude", "project_id": "demo", "session_id": "s-r", "remote_pinned": "1"}
+    other = go_live(world)
+    assert agent_wake.find_by_pty(mine)["remote_pinned"] is True
+    assert agent_wake.find_by_pty(other)["remote_pinned"] is False
+
+
 # --- the relay's terminal adapter ----------------------------------------------
 
 

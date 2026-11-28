@@ -43,6 +43,7 @@ BREVITY_HINT = "(This session was started from a chat app. Keep replies short, i
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
 LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
 UNKNOWN_MENTION_SHOWN = 3
+PEERS_SHOWN = 8
 LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 
@@ -51,6 +52,7 @@ class Command:
     kind: str  # send | list | status | stop | stop_all | help | open | bye
     name: str | None = None
     text: str = ""
+    tagged: bool = True  # False for an ordinary message routed by the open chat window
 
 
 def _cap_bytes(text: str) -> str:
@@ -277,19 +279,74 @@ def session_not_found(name: str) -> str:
     return system_reply(f"No session named {shown}.", ["`list` to see what is running."])
 
 
-def session_list(rows: list[tuple[str, str, str]]) -> str:
-    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE."""
-    if not rows:
+def session_list(
+    rows: list[tuple[str, str, str]], peers: list[tuple[str, str]] | None = None, more: int = 0, reach: str = ""
+) -> str:
+    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE. peers are other agents
+    in the project as (name, state), already capped; `more` is how many were left out and `reach` is
+    a name that can be typed to message one of them."""
+    peers = peers or []
+    if not rows and not peers:
         return no_sessions()
-    head = f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:"
-    lines = [f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1)]
-    waiting = next((name for name, _, state in rows if state == WAITING), None)
-    first = (
-        f"`{waiting}: your answer` to answer the one that is waiting."
-        if waiting
-        else f"`{rows[0][0]}: your request` to talk to a session."
+    parts = []
+    if rows:
+        parts.append(f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:")
+        parts.extend(f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1))
+    else:
+        parts.append("No remote sessions are running.")
+    if peers:
+        parts.append("\nOther agents in this project:")
+        parts.extend(f"- {name} {DOT} {state}" for name, state in peers)
+        if more:
+            parts.append(f"- {more} more.")
+    options = []
+    if rows:
+        waiting = next((name for name, _, state in rows if state == WAITING), None)
+        options.append(
+            f"`{waiting}: your answer` to answer the one that is waiting."
+            if waiting
+            else f"`{rows[0][0]}: your request` to talk to a session."
+        )
+        options.append(f"`status {rows[0][0]}` for details.")
+    else:
+        options.append("Send a request and it starts a new session.")
+    if peers:
+        options.append(f"`@gator {reach or peers[0][0]} your message` to message another agent.")
+    if rows:
+        options.append("`stop all` to stop everything and turn Remote control off.")
+    return system_reply("\n".join(parts), options)
+
+
+def peer_label(name: str) -> str:
+    """A session name from outside this chat, flattened to one line and capped."""
+    return " ".join(name.split())[:NAME_MAX_CHARS]
+
+
+def peer_sent(name: str, woke: bool) -> str:
+    body = f"Woke {peer_label(name)} and sent your message." if woke else f"Sent to {peer_label(name)}."
+    return system_reply(body, ["Its reply shows in its own terminal in AI Gator."])
+
+
+def peer_refused(name: str, reason: str) -> str:
+    return system_reply(
+        f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]
     )
-    return system_reply("\n".join([head, *lines]), [first, f"`status {rows[0][0]}` for details.", "`stop all` to stop everything and turn Remote control off."])
+
+
+def peer_limit(name: str, limit: int, wait_seconds: float) -> str:
+    return system_reply(
+        f"That is {limit} messages to {peer_label(name)} in the last hour, the most allowed. Not sent.",
+        [f"Wait {in_words(wait_seconds)}, then send it again.", f"Raise the limit in Settings, under {SETTINGS_SECTION}."],
+    )
+
+
+def peer_ambiguous(name: str, choices: list[tuple[str, str]]) -> str:
+    """Several agents share a name. choices are (short id, state); the id is what to type instead."""
+    lines = [f"- `{short}` {DOT} {state}" for short, state in choices]
+    return system_reply(
+        f"More than one agent is called {peer_label(name)}:\n" + "\n".join(lines),
+        [f"`{choices[0][0]} your message` to pick one by its id."],
+    )
 
 
 def which_session(names: list[str]) -> str:

@@ -44,7 +44,8 @@ def test_a_known_project_blank_and_in_range_numbers_are_accepted(known_projects)
     assert settings.validate({"remote_default_project": "Budget"}) is None
     assert settings.validate({"remote_default_project": ""}) is None
     assert settings.validate({"remote_default_project": None}) is None
-    assert settings.validate({"remote_session_idle_hours": 8, "remote_stale_minutes": 15}) is None
+    assert settings.validate({"remote_session_idle_hours": 8, "remote_stale_minutes": 15, "remote_peer_messages_per_hour": 30}) is None
+    assert settings.validate({"remote_peer_messages_per_hour": 0}) is None
     assert settings.validate({"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}) is None
 
 
@@ -62,6 +63,10 @@ def test_an_unknown_project_is_refused_with_a_clear_reason(known_projects):
         ("remote_session_idle_hours", True),
         ("remote_session_idle_hours", None),
         ("remote_stale_minutes", 121),
+        ("remote_peer_messages_per_hour", -1),
+        ("remote_peer_messages_per_hour", 1001),
+        ("remote_peer_messages_per_hour", 2.5),
+        ("remote_peer_messages_per_hour", "30"),
         ("teams_remote_control_enabled", "yes"),
         ("slack_remote_control_enabled", 1),
     ],
@@ -114,9 +119,14 @@ def test_the_limits_come_from_config_and_fall_back_to_the_defaults(monkeypatch):
     cfg = {}
     monkeypatch.setattr(settings, "load_config", lambda: cfg)
     assert (settings.idle_seconds(), settings.stale_seconds()) == (8 * 3600, 15 * 60)
-    cfg.update(remote_session_idle_hours=2, remote_stale_minutes=5)
+    assert settings.peer_messages_per_hour() == 30
+    cfg.update(remote_session_idle_hours=2, remote_stale_minutes=5, remote_peer_messages_per_hour=0)
+    assert settings.peer_messages_per_hour() == 0
     assert (settings.idle_seconds(), settings.stale_seconds()) == (7200, 300)
-    cfg.update(remote_session_idle_hours="x", remote_stale_minutes=0)
+    cfg.update(remote_session_idle_hours="x", remote_stale_minutes=0, remote_peer_messages_per_hour=-3)
+    assert settings.peer_messages_per_hour() == 30
+    cfg.update(remote_peer_messages_per_hour=0.5)
+    assert settings.peer_messages_per_hour() == 30
     assert (settings.idle_seconds(), settings.stale_seconds()) == (8 * 3600, 15 * 60)
 
 
@@ -196,6 +206,13 @@ def test_a_save_is_applied_inside_update_config_so_other_writes_are_not_lost(mon
     cfg = {"github_url": "keep"}
     seen[0](cfg)
     assert cfg == {"github_url": "keep", "remote_stale_minutes": 30}
+
+
+def test_the_peer_message_limit_accepts_zero_and_a_thousand_but_nothing_beyond(known_projects):
+    key = "remote_peer_messages_per_hour"
+    assert settings.validate({key: 0}) is None
+    assert settings.validate({key: 1000}) is None
+    assert "whole number" in settings.validate({key: 1.5})
 
 
 def test_the_removed_armed_hours_setting_is_ignored_and_never_stored(monkeypatch, known_projects):
