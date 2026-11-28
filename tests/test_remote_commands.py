@@ -13,6 +13,12 @@ def test_the_agent_prefix_has_two_slots_alone_and_three_while_several_sessions_a
     assert commands.agent_prefix("budget") == "[\U0001F40A Gator - budget]"
 
 
+def test_the_not_armed_reply_is_app_voice_and_ignored_by_the_loop_guard():
+    reply = commands.not_armed()
+    assert reply.startswith("[\U0001F40A Gator]")
+    assert commands.is_own_message(reply)
+
+
 def test_the_app_voice_and_the_agent_voice_differ_only_by_the_project_slot():
     assert commands.app_prefix() == "[\U0001F40A Gator]"
     assert commands.agent_prefix("budget", "Budget") == "[\U0001F40A Gator - Budget]"

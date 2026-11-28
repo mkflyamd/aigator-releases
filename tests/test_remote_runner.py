@@ -719,3 +719,40 @@ async def test_skipped_notice_is_never_posted_to_another_chat(refusing):
     await baselined(refusing)
     await refusing.feed(refusing.msg(101, "@gator old", age=3600))
     assert refusing.sent == []
+
+
+async def test_a_command_with_no_window_ever_opened_gets_one_not_turned_on_reply_and_runs_nothing(tmp_path):
+    w = World(tmp_path)
+    Master(w.state, w.clock).disarm()
+    w.build()
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator list"), w.msg(3, "@gator hi"))
+    assert w.channel.posted == [commands.not_armed()]
+    assert w.host.spawn_labels == []
+
+
+async def test_not_turned_on_is_said_again_for_the_next_window_and_not_after_one_ran_out(tmp_path):
+    w = World(tmp_path)
+    Master(w.state, w.clock).disarm()
+    w.build()
+    await w.feed(w.msg(1, "@gator hi"))
+    await w.feed(w.msg(2, "@gator hi"))
+    assert w.channel.posted == [commands.not_armed()]
+    Master(w.state, w.clock).arm()
+    await w.runner.tick()
+    Master(w.state, w.clock).disarm()
+    await w.runner.tick()
+    await w.feed(w.msg(3, "@gator hi"))
+    assert w.channel.posted.count(commands.not_armed()) == 2
+
+
+async def test_nothing_is_said_after_the_window_ran_out_or_for_a_stale_command(tmp_path):
+    w = World(tmp_path)
+    w.clock.now += 12 * 3600 + 1
+    await w.feed(w.msg(1, "@gator hi"))
+    assert commands.not_armed() not in w.channel.posted
+    fresh = World(tmp_path / "b")
+    Master(fresh.state, fresh.clock).disarm()
+    fresh.build()
+    await fresh.feed(fresh.msg(1, "@gator hi", age=3600))
+    assert fresh.channel.posted == []

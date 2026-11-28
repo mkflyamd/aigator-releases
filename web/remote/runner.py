@@ -82,6 +82,7 @@ class RemoteRunner:
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
         self._not_sent_noticed: set[str] = set()
+        self._not_armed_noticed = False
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -153,7 +154,10 @@ class RemoteRunner:
                 continue
             await self._close_if_expired()
             command = commands.parse(message.text) or await self._untagged(message)
-            if command is None or not self.live:
+            if command is None:
+                continue
+            if not self.live:
+                await self._note_not_armed(message)
                 continue
             if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
@@ -185,6 +189,16 @@ class RemoteRunner:
             await self._note_not_sent(message, "too long", commands.too_long)
             return None
         return commands.parse(f"@gator {text}")
+
+    async def _note_not_armed(self, message: InboundMessage) -> None:
+        """A switch that is on with no window ever opened (an upgrade, or after Disarm) gets one
+        plain line, and nothing runs. After a window has run out the channel stays silent."""
+        if self._not_armed_noticed or not self._enabled or self._master.record() is not None:
+            return
+        if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
+            return
+        self._not_armed_noticed = True
+        await self._post(commands.not_armed())
 
     async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
         """One plain line per reason per window, however many messages are held back."""
@@ -444,6 +458,8 @@ class RemoteRunner:
 
     async def tick(self) -> None:
         self._sync_guard()
+        if self._master.active():
+            self._not_armed_noticed = False
         if self._master.expired():
             await self._expire()
         elif self.live:
