@@ -1,4 +1,5 @@
 import pytest
+from remote import commands
 
 from remote import loop as remote_loop
 from remote.guard import Guard
@@ -52,7 +53,7 @@ async def test_enabling_arms_polls_and_says_online_once(s):
     await s.loop.step()
     await s.loop.step()
     assert s.guard.armed is True
-    assert s.channel.posted == ["[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
 
 
 async def test_polls_only_every_poll_interval(s):
@@ -65,19 +66,25 @@ async def test_polls_only_every_poll_interval(s):
     assert s.channel.polls == 2
 
 
-async def test_recovery_from_a_failed_poll_says_online_again(s):
+async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
     s.enabled = True
     await s.loop.step()
     s.channel.fail = True
     s.clock.now += 10
     await s.loop.step()
-    s.clock.now += 10
-    await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online"]
     s.channel.fail = False
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online", "[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
+
+
+async def test_a_restart_with_the_chat_window_open_says_nothing(s):
+    s.enabled = True
+    s.runner._window.open(s.clock.now)
+    assert s.runner._window.is_open()
+    await s.loop.step()
+    await s.loop.step()
+    assert s.channel.posted == []
 
 
 async def test_turning_the_switch_off_disarms(s):
@@ -171,3 +178,13 @@ async def test_a_slow_channel_step_does_not_hold_the_other_channel(monkeypatch):
     finally:
         release.set()
         task.cancel()
+
+
+async def test_switching_off_and_on_again_does_not_say_online_a_second_time(s):
+    s.enabled = True
+    await s.loop.step()
+    s.enabled = False
+    await s.loop.step()
+    s.enabled = True
+    await s.loop.step()
+    assert s.channel.posted == [commands.online()]

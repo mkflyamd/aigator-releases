@@ -1,5 +1,6 @@
 import pytest
 
+from remote import commands
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
 from remote.runner import RemoteRunner
@@ -101,6 +102,8 @@ class World:
         self.clock = Clock()
         self.host = FakeHost()
         self.state = State(tmp_path / "state.json")
+        self.hint = ""
+        self.branch = "main"
         self.build()
 
     def build(self):
@@ -108,7 +111,14 @@ class World:
         self.service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock)
         self.channel = FakeChannel(self.state)
         self.runner = RemoteRunner(
-            self.channel, self.service, self.guard, self.state, clock=self.clock, stale_seconds=900
+            self.channel,
+            self.service,
+            self.guard,
+            self.state,
+            clock=self.clock,
+            stale_seconds=900,
+            first_prompt_hint=self.hint,
+            branch_of=lambda path: self.branch,
         )
         self.runner.sync_enabled(True)
 
@@ -145,12 +155,11 @@ async def test_first_command_in_a_previously_empty_chat_is_not_swallowed_as_the_
     assert w.host.delivered == [("pty-1", "first ever")]
 
 
-async def test_command_starts_the_default_session_and_acknowledges(w):
+async def test_command_starts_the_default_session_and_says_nothing_until_it_is_slow(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator what is open?"))
     assert w.host.delivered == [("pty-1", "what is open?")]
-    assert len(w.channel.posted) == 1
-    assert w.channel.posted[0].startswith("[Gator - Claude - budget]")
+    assert w.channel.posted == []
 
 
 async def test_ordinary_notes_are_ignored(w):
@@ -206,7 +215,7 @@ async def test_messages_sent_while_offline_run_once_when_fresh_and_are_skipped_w
     )
     assert w.host.delivered == [("pty-1", "fresh")]
     notice = [p for p in w.channel.posted if "Skipped" in p]
-    assert notice == ["[Gator] Skipped 2 message(s) received while I was offline. Resend if still needed."]
+    assert notice == [commands.stale_skipped(2, 900)]
 
 
 async def test_more_than_20_commands_in_10_minutes_are_rate_limited(w):
@@ -243,7 +252,7 @@ async def test_a_message_is_stale_only_after_exactly_15_minutes(w):
     assert w.host.delivered == [("pty-1", "on the limit")]
     await w.feed(w.msg(102, "@gator one second over", age=901))
     assert w.host.delivered == [("pty-1", "on the limit")]
-    assert any("Skipped 1 message" in p for p in w.channel.posted)
+    assert commands.stale_skipped(1, 900) in w.channel.posted
 
 
 async def test_stop_all_stops_sessions_and_disarms(w):
@@ -289,12 +298,11 @@ async def test_a_failed_stop_is_reported_by_name_and_keeps_remote_control_armed(
     assert w.guard.armed is True
 
 
-async def test_stop_all_names_the_sessions_it_stopped(w):
+async def test_stop_all_says_how_many_sessions_it_stopped(w):
     await baselined(w)
     await w.service.start(BUDGET, "a")
     await w.feed(w.msg(101, "@gator stop all"))
-    assert "budget" in w.channel.posted[-1]
-    assert "re-arm" in w.channel.posted[-1]
+    assert w.channel.posted[-1] == commands.stopped(1)
 
 
 async def test_rearming_after_stop_all_needs_the_switch_toggled(w):
@@ -312,20 +320,20 @@ async def test_remote_control_disarms_at_the_absolute_cap_and_says_so_once(w):
     w.clock.now += 24 * 3600 + 1
     await w.runner.tick()
     await w.runner.tick()
-    assert w.channel.posted == ["[Gator] Remote control timed out. Re-arm it in Settings."]
+    assert w.channel.posted == [commands.timed_out(24 * 3600)]
     await w.feed(w.msg(101, "@gator late", age=0))
     assert w.host.delivered == []
 
 
 async def test_announce_online(w):
     await w.runner.announce_online()
-    assert w.channel.posted == ["[Gator] Online"]
+    assert w.channel.posted == [commands.online()]
 
 
 async def test_a_post_refused_by_the_channel_does_not_crash_the_runner(w):
     await baselined(w)
     w.channel.own = False
-    await w.feed(w.msg(101, "@gator hi"))
+    await w.feed(w.msg(101, "@gator say ok"))
     assert w.channel.posted == []
 
 
@@ -354,13 +362,13 @@ async def test_text_after_a_reserved_word_is_never_a_session_name(w):
     assert "No remote sessions" in w.channel.posted[-1]
 
 
-async def test_list_shows_short_name_agent_and_state(w):
+async def test_list_shows_the_count_name_project_and_state_in_words(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator first"))
     await w.feed(w.msg(102, "@gator list"))
     line = w.channel.posted[-1]
-    assert line.startswith("[Gator]")
-    assert "budget" in line and "Claude" in line
+    assert line == commands.session_list([("budget", "Budget", "working")])
+    assert line.startswith("[Gator] 1 session running:\n1. budget \u00b7 Budget \u00b7 working\n\nNext:\n")
 
 
 async def test_status_of_an_unknown_name_is_refused(w):
@@ -377,11 +385,10 @@ async def test_stop_by_name(w):
     assert w.guard.armed is True
 
 
-async def test_help_lists_the_commands(w):
+async def test_help_replies_with_the_tips_under_a_fresh_prefix(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator help"))
-    for command in ("@gator <text>", "@gator <name> <text>", "@gator list", "@gator status [name]", "@gator stop [name]", "@gator stop all"):
-        assert command in w.channel.posted[-1]
+    assert w.channel.posted[-1] == commands.help_text(False)
     assert not w.channel.posted[-1].lower().startswith("@gator")
 
 
@@ -391,7 +398,140 @@ async def test_completed_turn_posts_the_agent_reply(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Two files are open."
     await w.runner.tick()
-    assert w.channel.posted[-1] == "[Gator - Claude - budget] Two files are open."
+    assert w.channel.posted == ["[Gator - Claude - budget] Two files are open."]
+
+
+async def _finish(w, text, state="idle"):
+    w.host.states["pty-1"] = {"state": state, "at": w.clock.now + 1}
+    w.host.last["pty-1"] = text
+    await w.runner.tick()
+
+
+async def test_a_slow_turn_gets_one_working_message_with_the_branch(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += commands.ACK_DELAY_SECONDS - 1
+    await w.runner.tick()
+    assert w.channel.posted == []
+    w.clock.now += 2
+    await w.runner.tick()
+    await w.runner.tick()
+    assert w.channel.posted == [commands.working("Claude", "budget", "main", False)]
+    assert "Branch: main" in w.channel.posted[0]
+
+
+async def test_working_leaves_the_branch_out_when_there_is_none(w):
+    w.branch = None
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 20
+    await w.runner.tick()
+    assert "Branch" not in w.channel.posted[0]
+
+
+async def test_still_working_is_posted_at_most_every_two_minutes(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    for step in (20, 100, 100, 100, 30):
+        w.clock.now += step
+        await w.runner.tick()
+    assert w.channel.posted == [
+        commands.working("Claude", "budget", "main", False),
+        commands.progress("Claude", "budget", 220),
+        commands.progress("Claude", "budget", 350),
+    ]
+
+
+async def test_done_between_fifteen_seconds_and_a_minute_is_plain_done(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 30
+    await w.runner.tick()
+    await _finish(w, "All good.")
+    assert w.channel.posted[-1] == "[Gator - Claude - budget] Done.\nAll good."
+
+
+async def test_done_past_a_minute_says_how_long_it_took(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 20
+    await w.runner.tick()
+    w.clock.now += 5 * 60
+    await _finish(w, "All good.")
+    assert w.channel.posted[-1].startswith("[Gator - Claude - budget] Done in 5 min.\nAll good.")
+
+
+async def test_a_turn_that_finished_first_never_gets_a_late_working_message(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await _finish(w, "Quick.")
+    w.clock.now += 60
+    await w.runner.tick()
+    assert w.channel.posted == ["[Gator - Claude - budget] Quick."]
+
+
+async def test_a_trailing_question_is_sent_as_waiting_with_the_answers_as_options(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await _finish(w, "Which one?\n1. Alpha\n2. Beta")
+    assert w.channel.posted == [
+        "[Gator - Claude - budget] Waiting for your answer.\nWhich one?\n1. Alpha\n2. Beta\n\nNext:\n• `Alpha`\n• `Beta`"
+    ]
+    assert w.service.list()[0].waiting is True
+
+
+async def test_the_first_prompt_of_a_new_session_carries_the_brevity_hint_and_later_ones_do_not(w):
+    w.hint = commands.BREVITY_HINT
+    w.build()
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@gator again"))
+    assert w.host.delivered == [("pty-1", f"go\n\n{commands.BREVITY_HINT}"), ("pty-1", "again")]
+
+
+async def test_a_leading_name_that_is_a_session_routes_to_it(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@budget run the tests"))
+    await w.feed(w.msg(103, "@gator @Budget: and lint"))
+    assert w.host.delivered == [("pty-1", "go"), ("pty-1", "and lint")]
+
+
+async def test_a_leading_name_that_is_not_a_session_gets_one_reply_and_is_not_sent(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@gator @ghost hello there"))
+    assert w.host.delivered == [("pty-1", "go")]
+    assert w.channel.posted == [commands.unknown_mention("ghost", ["budget"], "Claude")]
+
+
+async def test_a_leading_gator_or_agent_name_is_just_the_request(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator @gator go"))
+    await w.feed(w.msg(102, "@gator @claude again"))
+    assert w.host.delivered == [("pty-1", "go"), ("pty-1", "again")]
+
+
+async def test_an_email_address_is_not_a_leading_name(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator @ann@example.com hello"))
+    assert w.host.delivered == [("pty-1", "@ann@example.com hello")]
+
+
+@pytest.mark.parametrize("text", ["[Claude - proj] \U0001F40A x", "[Ranger - proj - sess] \U0001F40A x", "[Gator] \U0001F40A x"])
+async def test_a_message_in_the_gator_shape_never_triggers_a_command(w, text):
+    await baselined(w)
+    await w.feed(w.msg(101, f"{text} @gator stop all"))
+    assert w.host.delivered == []
+    assert w.guard.armed is True
+
+
+async def test_a_normal_note_that_starts_with_a_bracket_is_not_ignored(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "[todo] @gator fix it"))
+    assert w.host.delivered == []
+    await w.feed(w.msg(102, "@gator [todo] fix it"))
+    assert w.host.delivered == [("pty-1", "[todo] fix it")]
 
 
 async def test_a_question_from_the_agent_is_forwarded(w):
@@ -400,8 +540,9 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Delete the folder?"
     await w.runner.tick()
-    assert "Delete the folder?" in w.channel.posted[-1]
-    assert w.channel.posted[-1].startswith("[Gator - Claude - budget]")
+    assert w.channel.posted[-1] == commands.agent_result(
+        "Claude", "budget", "Waiting for your answer.", "Delete the folder?", waiting=True
+    )
 
 
 async def test_an_agent_that_exits_is_reported(w):
@@ -409,7 +550,17 @@ async def test_an_agent_that_exits_is_reported(w):
     await w.feed(w.msg(101, "@gator go"))
     w.host.alive_ids.clear()
     await w.runner.tick()
-    assert "exited" in w.channel.posted[-1]
+    assert w.channel.posted[-1] == commands.agent_exited("Claude", "budget")
+
+
+async def test_a_finished_turn_with_no_text_is_never_a_bare_done(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
+    w.host.last["pty-1"] = ""
+    await w.runner.tick()
+    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "")
+    assert "No text came back." in w.channel.posted[-1]
 
 
 async def test_a_reply_that_echoes_a_command_cannot_form_one(w):
@@ -422,38 +573,64 @@ async def test_a_reply_that_echoes_a_command_cannot_form_one(w):
     assert not w.channel.posted[-1].lower().lstrip().startswith("@gator")
 
 
-async def test_bare_text_goes_to_the_default_project_not_a_live_session_elsewhere(w):
+async def test_bare_text_goes_to_the_only_running_session_even_in_another_project(w):
     await baselined(w)
     await w.service.start(OTHER, "elsewhere")
-    await w.feed(w.msg(101, "@gator hello"))
-    assert w.host.delivered[-1] == ("pty-2", "hello")
-    assert [s.project.id for s in w.service.list()] == ["other", "budget"]
+    await w.feed(w.msg(101, "@gator say ok"))
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
+    assert [s.project.id for s in w.service.list()] == ["other"]
 
 
-async def test_bare_text_picks_the_default_projects_session_among_several_projects(w):
+async def test_bare_text_with_nothing_running_starts_a_session_in_the_default_project(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator say ok"))
+    assert [s.project.id for s in w.service.list()] == ["budget"]
+
+
+async def test_bare_text_goes_to_the_one_waiting_session_among_several(w):
     await baselined(w)
     await w.service.start(BUDGET, "a")
     await w.service.start(OTHER, "b")
-    await w.feed(w.msg(101, "@gator hello"))
-    assert w.host.delivered[-1] == ("pty-1", "hello")
+    w.service.list()[1].waiting = True
+    await w.feed(w.msg(101, "@gator say ok"))
+    assert w.host.delivered[-1] == ("pty-2", "say ok")
 
 
-async def test_the_default_project_with_two_sessions_is_refused_naming_only_its_sessions(w):
+async def test_bare_text_with_several_running_and_none_waiting_asks_which_session(w):
     await baselined(w)
     await w.service.start(BUDGET, "a")
     await w.service.start(OTHER, "b")
     await w.service.start(BUDGET, "c")
-    await w.feed(w.msg(101, "@gator hello"))
+    await w.feed(w.msg(101, "@gator say ok"))
     assert w.host.delivered == [("pty-1", "a"), ("pty-2", "b"), ("pty-3", "c")]
-    assert "budget-2" in w.channel.posted[-1]
-    assert "other" not in w.channel.posted[-1]
+    assert w.channel.posted[-1] == commands.which_session(["budget", "other", "budget-2"])
+    assert "`budget: your message`" in w.channel.posted[-1]
+
+
+async def test_bare_text_with_several_waiting_asks_which_session(w):
+    await baselined(w)
+    await w.service.start(BUDGET, "a")
+    await w.service.start(OTHER, "b")
+    for session in w.service.list():
+        session.waiting = True
+    await w.feed(w.msg(101, "@gator say ok"))
+    assert w.host.delivered == [("pty-1", "a"), ("pty-2", "b")]
+    assert w.channel.posted[-1].startswith("[Gator] Which session?")
+
+
+async def test_a_name_with_a_colon_picks_the_session(w):
+    await baselined(w)
+    await w.service.start(OTHER, "b")
+    await w.service.start(BUDGET, "a")
+    await w.feed(w.msg(101, "@gator other: say ok"))
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
 
 
 async def test_a_named_send_reaches_a_session_in_another_project(w):
     await baselined(w)
     await w.service.start(OTHER, "b")
-    await w.feed(w.msg(101, "@gator other hello"))
-    assert w.host.delivered[-1] == ("pty-1", "hello")
+    await w.feed(w.msg(101, "@gator other say ok"))
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
 
 
 @pytest.fixture
@@ -480,8 +657,8 @@ async def test_online_notice_is_never_posted_to_another_chat(refusing):
 
 async def test_command_acknowledgement_is_never_posted_to_another_chat(refusing):
     await baselined(refusing)
-    await refusing.feed(refusing.msg(101, "@gator hello"))
-    assert refusing.host.delivered == [("pty-1", "hello")]
+    await refusing.feed(refusing.msg(101, "@gator say ok"))
+    assert refusing.host.delivered == [("pty-1", "say ok")]
     assert refusing.sent == []
 
 
@@ -494,7 +671,7 @@ async def test_command_reply_and_refusal_are_never_posted_to_another_chat(refusi
 
 async def test_agent_event_posts_are_never_sent_to_another_chat(refusing):
     await baselined(refusing)
-    await refusing.feed(refusing.msg(101, "@gator hello"))
+    await refusing.feed(refusing.msg(101, "@gator say ok"))
     refusing.host.states["pty-1"] = {"state": "idle", "at": refusing.clock.now + 5}
     refusing.host.last["pty-1"] = "Done."
     await refusing.runner.tick()

@@ -65,7 +65,7 @@ async def test_a_session_survives_a_restart_with_its_name_and_takes_a_named_send
     w.restart()
     await w.runner.restore()
     await w.feed(w.msg(103, "@gator list"))
-    assert "- budget (Claude, Budget) idle" in w.channel.posted[-1]
+    assert "1. budget \u00b7 Budget \u00b7 idle" in w.channel.posted[-1]
     await w.feed(w.msg(104, "@gator budget follow up"))
     assert w.host.delivered[-1] == ("pty-1", "follow up")
     assert w.host.n == 1
@@ -192,7 +192,7 @@ async def test_the_last_message_of_a_restored_session_is_read_from_the_host_labe
     monkeypatch.setattr(terminal, "host_session_labels", lambda sid, strict=False: _pinned(sid)["meta"])
     monkeypatch.setattr(projects, "get_project", lambda name: {"repo_path": "C:/repo/b"})
     monkeypatch.setattr(agent_sessions, "find_session", lambda repo, agent, sid: object())
-    monkeypatch.setattr(agent_sessions, "_transcript_messages", lambda rec: [("assistant", "all done")])
+    monkeypatch.setattr(agent_sessions, "last_assistant_text", lambda rec: "all done")
     monkeypatch.setattr(agent_handoff, "_configured_api_keys", lambda: [])
     assert await LocalPtyHost().last_message("pty-1") == "all done"
 
