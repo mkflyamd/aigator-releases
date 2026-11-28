@@ -18,6 +18,7 @@ _log = logging.getLogger(__name__)
 AGENT = "claude"
 _TRANSCRIPT_TRIES = 4
 _TRANSCRIPT_WAIT = 0.5
+SCREEN_TAIL_CHARS = 12000
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 
 
@@ -225,11 +226,14 @@ class LocalPtyHost:
         if not found:
             return None
         redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
-        return prompts.parse(found["payload"], found["at"], redact)
+        parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
+        return parsed or prompts.unreadable(found["at"])
 
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
-        """Types `keys` only while the agent is still showing the prompt `prompt_id`. A turn that the keys
-        end fires no hook, so the idle state is reported here."""
+        """Types `keys` only while the agent is still showing the prompt `prompt_id`. No hook fires when the
+        prompt is answered at the terminal, so the prompt file and the asking state outlive it; the terminal
+        itself is checked: no keys typed there since the prompt appeared, and (for a permission) its dialog
+        still the last thing on screen. A turn that the keys end fires no hook, so idle is reported here."""
         import agent_state
         from remote import prompts
         from routes import terminal
@@ -238,6 +242,16 @@ class LocalPtyHost:
         state = await self.state(pty_id)
         if shown is None or shown.id != prompt_id or not state or state["state"] != "asking":
             raise StalePrompt("That prompt is no longer showing.")
+        entry = await asyncio.to_thread(terminal.get_pty_session, pty_id)
+        if entry is None:
+            raise HostError("That session is no longer running.")
+        if entry.last_user_input > shown.at:
+            raise StalePrompt("It was answered at the terminal.")
+        if shown.kind == prompts.PERMISSION:
+            _, end = entry.read_from(10**12)
+            tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
+            if not prompts.permission_dialog_showing(_ANSI.sub("", tail)):
+                raise StalePrompt("The terminal is no longer showing that permission.")
         for index, key in enumerate(keys):
             if index:
                 await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)

@@ -6,6 +6,7 @@ import pytest
 from remote import commands, slack_channel
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.slack_channel import SlackSelfDM
@@ -61,9 +62,9 @@ def slack(monkeypatch, autosend_gate):
 def test_post_to_the_own_self_dm_sends_and_records_the_ts(tmp_path, slack):
     state = State(tmp_path / "s.json")
     channel = SlackSelfDM(state=state)
-    ts = channel.post("[Gator] Online")
+    ts = channel.post("[\U0001F40A Gator] Online")
     assert ts == "1700000000.000001"
-    assert slack.posts() == [("chat.postMessage", {"channel": SELF_DM, "text": "[Gator] Online"}, "POST")]
+    assert slack.posts() == [("chat.postMessage", {"channel": SELF_DM, "text": "[\U0001F40A Gator] Online"}, "POST")]
     assert state.is_own_post("slack", "1700000000.000001")
 
 
@@ -72,7 +73,7 @@ def test_post_to_any_other_dm_is_refused_and_logged(tmp_path, slack, caplog):
     assert channel.is_own_self_chat() is False
     with caplog.at_level("WARNING"):
         with pytest.raises(ChannelRefused, match="not the own self-DM"):
-            channel.post("[Gator] hello")
+            channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
     assert OTHER_DM in caplog.text
 
@@ -81,14 +82,14 @@ def test_a_channel_that_is_not_a_dm_is_refused(tmp_path, slack):
     slack.channels["C123"] = {"is_im": False, "is_channel": True}
     channel = SlackSelfDM(channel_id="C123", state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused):
-        channel.post("[Gator] hello")
+        channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
 
 
 def test_a_failed_ownership_check_posts_nothing(tmp_path, slack):
     channel = SlackSelfDM(channel_id="D404", state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused):
-        channel.post("[Gator] hello")
+        channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
 
 
@@ -96,7 +97,7 @@ def test_an_unknown_own_user_id_posts_nothing(tmp_path, slack, monkeypatch):
     monkeypatch.setattr(slack_channel, "_own_user_id", lambda: "")
     channel = SlackSelfDM(channel_id=SELF_DM, state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused):
-        channel.post("[Gator] hello")
+        channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
 
 
@@ -109,7 +110,7 @@ def test_a_check_that_cannot_be_made_posts_nothing(tmp_path, slack, monkeypatch)
     monkeypatch.setattr(slack_channel, "_api", api)
     channel = SlackSelfDM(channel_id=SELF_DM, state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused, match="not the own self-DM"):
-        channel.post("[Gator] hello")
+        channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
 
 
@@ -122,7 +123,7 @@ def test_no_self_dm_to_open_posts_nothing(tmp_path, slack, monkeypatch):
     monkeypatch.setattr(slack_channel, "_api", api)
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
     with pytest.raises(ChannelRefused):
-        channel.post("[Gator] hello")
+        channel.post("[\U0001F40A Gator] hello")
     assert slack.posts() == []
 
 
@@ -134,14 +135,14 @@ def test_the_self_dm_is_opened_with_the_own_user_id(slack):
 def test_the_ownership_check_is_cached_after_it_passes(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
     channel.poll()
-    channel.post("[Gator] one")
-    channel.post("[Gator] two")
+    channel.post("[\U0001F40A Gator] one")
+    channel.post("[\U0001F40A Gator] two")
     assert [c[0] for c in slack.calls].count("conversations.info") == 1
 
 
 def test_post_that_could_form_a_command_is_refused(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
-    for text in ("@gator stop all", "hello", "  @GATOR x"):
+    for text in ("@gator stop all", "hello", "  @GATOR x", "[todo] x"):
         with pytest.raises(ChannelRefused):
             channel.post(text)
     assert slack.posts() == []
@@ -149,23 +150,23 @@ def test_post_that_could_form_a_command_is_refused(tmp_path, slack):
 
 def test_post_escapes_slack_control_characters(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
-    channel.post("[Gator - Claude - x] <!channel> a & b")
-    assert slack.posts()[0][1]["text"] == "[Gator - Claude - x] &lt;!channel&gt; a &amp; b"
+    channel.post("[\U0001F40A Gator - x] <!channel> a & b")
+    assert slack.posts()[0][1]["text"] == "[\U0001F40A Gator - x] &lt;!channel&gt; a &amp; b"
 
 
 def test_post_converts_markdown_to_slack_mrkdwn(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
-    channel.post("[Gator - Claude - x] **Done** with `ls`\n- one\n- two")
+    channel.post("[\U0001F40A Gator - x] **Done** with `ls`\n- one\n- two")
     text = slack.posts()[0][1]["text"]
     assert "**" not in text
-    assert text == "[Gator - Claude - x] *Done* with `ls`\n\n• one\n• two"
+    assert text == "[\U0001F40A Gator - x] *Done* with `ls`\n\n• one\n• two"
 
 
 def test_a_failed_post_raises_refused_and_records_nothing(tmp_path, slack):
     state = State(tmp_path / "s.json")
     slack.fail_post = "token_revoked"
     with pytest.raises(ChannelRefused, match="token_revoked"):
-        SlackSelfDM(state=state).post("[Gator] hi")
+        SlackSelfDM(state=state).post("[\U0001F40A Gator] hi")
     assert not state.is_own_post("slack", "1700000000.000001")
 
 
@@ -210,6 +211,7 @@ class SlackWorld:
         self.host = FakeHost()
         service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock)
         self.runner = RemoteRunner(SlackSelfDM(state=self.state), service, Guard(clock=self.clock), self.state, clock=self.clock)
+        Master(self.state, self.clock).arm()
         self.runner.sync_enabled(True)
 
     def ts(self, offset=0.0, seq=1):
@@ -234,7 +236,7 @@ async def test_slack_command_runs_and_the_reply_is_posted_to_the_self_dm(tmp_pat
     await w.runner.tick()
     (post,) = slack.posts()
     assert post[1]["channel"] == SELF_DM
-    assert post[1]["text"] == "[Gator - Claude - budget] Two files are open."
+    assert post[1]["text"] == "[\U0001F40A Gator - Budget] Two files are open."
 
 
 async def test_gator_own_posts_are_never_read_back_as_commands(tmp_path, slack):
@@ -318,6 +320,7 @@ async def test_stop_all_on_slack_leaves_teams_armed_and_its_sessions_running(tmp
         service = RemoteService(host, default_project=lambda: BUDGET, clock=clock)
         guard = Guard(clock=clock)
         runner = RemoteRunner(channel, service, guard, state, clock=clock)
+        Master(state, clock).arm()
         runner.sync_enabled(True)
         guards[channel.name] = guard
         return runner, service

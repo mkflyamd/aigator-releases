@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from remote.commands import SYSTEM_PREFIX, _tidy, elapsed_words, next_block, system_reply
+from remote.commands import _tidy, agent_prefix, elapsed_words, next_block, system_reply
 
 COMMAND_MAX_CHARS = 150
 PATH_MAX_CHARS = 200
@@ -20,14 +20,17 @@ TOOL_MAX_CHARS = 80
 QUESTION_MAX_CHARS = 600
 LABEL_MAX_CHARS = 60
 DESCRIPTION_MAX_CHARS = 80
-TYPED_MAX_CHARS = 500
 CHOICES_MAX = 9
 ELLIPSIS = "…"
 
 ENTER, DOWN, ESCAPE = "\r", "\x1b[B", "\x1b"
 KEY_PAUSE_SECONDS = 0.2
 
-PERMISSION, QUESTION, DRAFT, APP_ONLY = "permission", "question", "draft", "app"
+PERMISSION, PERMISSION_APP, QUESTION, DRAFT, APP_ONLY = "permission", "permission_app", "question", "draft", "app"
+
+# Tools whose dialog was seen live to make option 1 a plain Yes, so one Enter is exactly "allow once".
+# A tool not listed here (ExitPlanMode's option 1 switches to auto-accept; MCP dialogs were not seen) is app-only.
+ENTER_ALLOW_TOOLS = frozenset({"Bash", "Edit", "Write"})
 
 _PATH_KEYS = ("file_path", "path", "notebook_path")
 _DRAFT_WORDS = {"send", "post", "reply", "draft", "forward", "compose", "publish"}
@@ -40,6 +43,7 @@ ALREADY_ANSWERED = "That was already answered in AI Gator."
 OPEN_APP_COMMAND = "Open AI Gator to review the whole command before allowing it."
 OPEN_APP_DRAFT = "Open AI Gator to review it and send."
 OPEN_APP_QUESTION = "Open AI Gator to answer this one."
+OPEN_APP_PERMISSION = "Open AI Gator to review and answer this permission."
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,7 @@ class Prompt:
     path_label: str = "Path"
     command: str = ""
     cut: bool = False
+    at: float = 0.0
     question: str = ""
     choices: tuple[Choice, ...] = ()
     why_app: str = ""
@@ -69,6 +74,7 @@ class Prompt:
     def lead(self) -> str:
         return {
             PERMISSION: "permission",
+            PERMISSION_APP: "permission",
             QUESTION: "a question",
             DRAFT: "a draft to review",
             APP_ONLY: "a question",
@@ -88,11 +94,12 @@ class Refused:
 
 
 def _plain(text: object, limit: int, redact: Callable[[str], str]) -> tuple[str, bool]:
-    """One printable line, redacted, cut with an ellipsis. The flag says whether it was cut."""
-    one = " ".join(redact(str(text or "")).split())
+    """One printable line, redacted, cut with an ellipsis. The flag says whether it differs from the original."""
+    raw = str(text or "").strip()
+    one = " ".join(redact(raw).split())
     one = "".join(ch for ch in one if ch.isprintable())
     if len(one) <= limit:
-        return one, False
+        return one, one != raw
     return one[:limit].rstrip() + ELLIPSIS, True
 
 
@@ -149,15 +156,14 @@ def parse(payload: dict, at: float, redact: Callable[[str], str] = str) -> Promp
     if tool == "AskUserQuestion":
         text, choices, why = _question(tool_input, redact)
         kind = APP_ONLY if why else QUESTION
-        return Prompt(pid, kind, tool=shown_tool, question=text, choices=choices, why_app=why)
+        return Prompt(pid, kind, tool=shown_tool, at=at, question=text, choices=choices, why_app=why)
     if _is_draft_tool(tool):
-        return Prompt(pid, DRAFT, tool=shown_tool)
+        return Prompt(pid, DRAFT, tool=shown_tool, at=at)
     cwd = str(payload.get("cwd") or "")
     command, command_cut = "", False
     if tool == "Bash":
         raw = str(tool_input.get("command") or "")
         command, command_cut = _plain(raw, COMMAND_MAX_CHARS, redact)
-        command_cut = command_cut or "\n" in raw.strip()
     path, path_cut, label = "", False, "Path"
     for key in _PATH_KEYS:
         if tool_input.get(key):
@@ -167,9 +173,16 @@ def parse(payload: dict, at: float, redact: Callable[[str], str] = str) -> Promp
         if tool == "WebFetch" and tool_input.get("url"):
             path, path_cut = _plain(tool_input["url"], PATH_MAX_CHARS, redact)
             label = "URL"
+    shown = bool(command) if tool == "Bash" else bool(path)
+    kind = PERMISSION if tool in ENTER_ALLOW_TOOLS and shown else PERMISSION_APP
     return Prompt(
-        pid, PERMISSION, tool=shown_tool, path=path, path_label=label, command=command, cut=command_cut or path_cut
+        pid, kind, tool=shown_tool, at=at, path=path, path_label=label, command=command, cut=command_cut or path_cut
     )
+
+
+def unreadable(at: float) -> Prompt:
+    """A prompt file that could not be read (too large, or not the hook's JSON): there is still something to answer."""
+    return Prompt(hashlib.sha256(f"unreadable:{at}".encode()).hexdigest()[:12], APP_ONLY, at=at, why_app="it is too large to show here")
 
 
 def _digits(count: int) -> str:
@@ -192,18 +205,30 @@ def resolve(prompt: Prompt, text: str) -> Answer | Refused:
     if match:
         number = int(match.group(1))
         if not 1 <= number <= len(prompt.choices):
-            return Refused(f"pick {_digits(len(prompt.choices))}, or type your answer.")
+            return Refused(f"pick {_digits(len(prompt.choices))}, or answer it in AI Gator.")
         return _pick(prompt, number)
     for number, choice in enumerate(prompt.choices, 1):
         if reply.lower() == choice.label.lower():
             return _pick(prompt, number)
-    typed = "".join(ch for ch in reply if ch.isprintable())
-    if not typed:
-        return Refused("there was nothing to type.")
-    if len(typed) > TYPED_MAX_CHARS:
-        return Refused(f"that answer is over {TYPED_MAX_CHARS} characters.")
-    shown, _ = _plain(typed, LABEL_MAX_CHARS, str)
-    return Answer((*(DOWN,) * len(prompt.choices), typed, ENTER), f"Got it: {shown}.")
+    return Refused(f"pick {_digits(len(prompt.choices))}, or answer it in AI Gator.")
+
+
+_FOOTER = "Esctocancel"
+_FOOTER_TAIL = re.compile(r"(?:·Tabtoamend|·ctrl\+etoexplain)*")
+
+
+def permission_dialog_showing(tail: str) -> bool:
+    """True when the newest thing on the terminal (ANSI already stripped) is a permission dialog with a plain
+    "1. Yes" and nothing after its footer. Whitespace is dropped because the terminal paints spaces as cursor moves."""
+    flat = re.sub(r"\s+", "", tail)
+    start = flat.rfind("Doyouwantto")
+    if start < 0:
+        return False
+    dialog = flat[start:]
+    cut = dialog.rfind(_FOOTER)
+    if cut < 0 or "1.Yes" not in dialog[:cut]:
+        return False
+    return _FOOTER_TAIL.fullmatch(dialog[cut + len(_FOOTER) :]) is not None
 
 
 def _pick(prompt: Prompt, number: int) -> Answer:
@@ -229,12 +254,14 @@ def _options(prompt: Prompt) -> list[str]:
         for number, choice in enumerate(prompt.choices, 1):
             out.append(f"`{number}` {choice.label}" + (f": {choice.description}" if choice.description else ""))
         return out
+    if prompt.kind == PERMISSION_APP:
+        return [OPEN_APP_PERMISSION]
     return [OPEN_APP_QUESTION]
 
 
 def label(session: str, project: str) -> str:
     """The long form, with the session, because this message is the one the user replies to."""
-    return f"{SYSTEM_PREFIX} - {session} - {project}]"
+    return agent_prefix(session, project, several=True)
 
 
 def waiting_message(
@@ -246,7 +273,7 @@ def waiting_message(
     head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}{after}."
     if prompt.kind == DRAFT:
         return _tidy(f"{label(session, project)} {head}\n{OPEN_APP_DRAFT}")
-    body = _facts(prompt) if prompt.kind == PERMISSION else ([prompt.question] if prompt.question else [])
+    body = _facts(prompt) if prompt.kind in (PERMISSION, PERMISSION_APP) else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")
     return _tidy(f"{label(session, project)} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
@@ -265,4 +292,6 @@ def confirmation(session: str, project: str, done: str) -> str:
 
 def answer_word(prompt: Prompt | None) -> str:
     """What `list` suggests typing after `{session}: `."""
-    return ALLOW if prompt is not None and prompt.kind == PERMISSION and not prompt.cut else "your answer"
+    if prompt is not None and prompt.kind == PERMISSION and not prompt.cut:
+        return ALLOW
+    return "a number" if prompt is not None and prompt.kind == QUESTION else "your answer"

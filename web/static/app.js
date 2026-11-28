@@ -17157,7 +17157,6 @@ fetch('/api/teams/chats')
   const _rcNumbers = [
     { key: 'remote_session_idle_hours', input: 'remote-session-idle-hours', fallback: 8 },
     { key: 'remote_stale_minutes', input: 'remote-stale-minutes', fallback: 15 },
-    { key: 'remote_armed_max_hours', input: 'remote-armed-max-hours', fallback: 24 },
   ];
   const _rcError = document.getElementById('remote-settings-error');
   let _rcProjectDrop = null;

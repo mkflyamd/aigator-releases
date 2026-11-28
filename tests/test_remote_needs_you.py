@@ -50,7 +50,7 @@ async def test_a_session_started_in_the_app_is_not_posted_until_it_has_waited_tw
     w.clock.now += 20
     await w.runner.tick()
     [text] = w.channel.posted
-    assert text.startswith("[Gator - budget - Budget] Needs you: permission, waiting 2 min.\n")
+    assert text.startswith("[🐊 Gator - budget - Budget] Needs you: permission, waiting 2 min.\n")
     assert len(routed(w)) == 1
     await w.runner.tick()
     assert len(w.channel.posted) == 1
@@ -84,9 +84,9 @@ async def test_only_three_messages_go_out_and_one_line_names_the_rest(w):
         await show(w, f"pty-{n}", BASH_PERMISSION, at=n)
     assert len(routed(w)) == 3
     assert [t.split("]")[0] for t in w.channel.posted[:3]] == [
-        "[Gator - budget - Budget",
-        "[Gator - budget-2 - Budget",
-        "[Gator - budget-3 - Budget",
+        "[🐊 Gator - budget - Budget",
+        "[🐊 Gator - budget-2 - Budget",
+        "[🐊 Gator - budget-3 - Budget",
     ]
     assert w.channel.posted[3] == prompts.more_waiting([("budget-4", 1)])
     await w.runner.tick()
@@ -103,8 +103,8 @@ async def test_the_next_waiting_session_is_posted_once_an_answer_frees_a_place(w
     await quote_reply(w, first, "allow")
     assert w.host.typed == [("pty-1", (prompts.ENTER,))]
     after = w.channel.posted[before:]
-    assert after[0] == "[Gator - budget - Budget] Allowed once."
-    assert after[1].startswith("[Gator - budget-4 - Budget] Needs you: permission.")
+    assert after[0] == "[🐊 Gator - budget - Budget] Allowed once."
+    assert after[1].startswith("[🐊 Gator - budget-4 - Budget] Needs you: permission.")
     assert len(after) == 2
     assert len(routed(w)) == 3
 
@@ -119,7 +119,7 @@ async def test_a_quote_reply_answers_the_quoted_session_even_when_the_chat_is_cl
     w.runner._window.close()
     await quote_reply(w, second["message_id"], "2")
     assert w.host.typed == [("pty-2", (prompts.DOWN, prompts.ENTER))]
-    assert w.channel.posted[-1] == "[Gator - budget-2 - Budget] Got it: Blue."
+    assert w.channel.posted[-1] == "[🐊 Gator - budget-2 - Budget] Got it: Blue."
     assert [m["session_id"] for m in routed(w)] == [w.service.resolve("budget").id]
 
 
@@ -145,7 +145,7 @@ async def test_a_late_quote_reply_to_an_answered_prompt_types_nothing_and_does_n
     w.channel.posted.clear()
     await quote_reply(w, old, "allow")
     assert w.host.typed == []
-    assert w.channel.posted == [f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
+    assert w.channel.posted == [f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
     assert len(routed(w)) == 1
 
 
@@ -159,7 +159,7 @@ async def test_a_quote_reply_to_a_prompt_answered_in_the_app_says_so(w):
     w.channel.posted.clear()
     await quote_reply(w, posted, "allow")
     assert w.host.typed == []
-    assert w.channel.posted == [f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
+    assert w.channel.posted == [f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"]
 
 
 async def test_a_quote_reply_to_a_message_gator_never_posted_is_an_ordinary_message(w):
@@ -186,7 +186,7 @@ async def test_a_quote_reply_with_a_command_in_it_runs_that_command(w):
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
     await quote_reply(w, routed(w)[0]["message_id"], "@gator list")
-    assert w.channel.posted[-1].startswith("[Gator] 1 session running:")
+    assert w.channel.posted[-1].startswith("[🐊 Gator] 1 session running:")
     assert w.host.typed == []
 
 
@@ -219,7 +219,7 @@ async def test_replies_the_channel_lists_apart_are_answered_in_order_and_once(w)
     assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.ENTER))]
     await w.runner.process_replies([quoted(w, posted, "1")])
     assert len(w.host.typed) == 1
-    assert w.channel.posted[-1] == f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
+    assert w.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
 
 
 async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting_session(w):
@@ -230,7 +230,7 @@ async def test_a_prompt_answered_in_the_app_frees_its_place_for_the_next_waiting
     w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 50}
     await w.runner.tick()
     [text] = w.channel.posted[before:]
-    assert text.startswith("[Gator - budget-4 - Budget] Needs you: permission.")
+    assert text.startswith("[🐊 Gator - budget-4 - Budget] Needs you: permission.")
     assert all(m["session_id"] != w.service.resolve("budget").id for m in routed(w))
 
 
@@ -256,7 +256,7 @@ async def test_a_quote_reply_goes_through_the_stale_screen_check_before_anything
     w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 9}
     await quote_reply(w, posted, "allow")
     assert w.host.typed == []
-    assert w.channel.posted[-1] == f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
+    assert w.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
 
 
 async def test_a_quote_reply_to_a_draft_is_refused_and_types_nothing(w):

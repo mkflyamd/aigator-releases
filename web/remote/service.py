@@ -257,6 +257,11 @@ class RemoteService:
 
     async def _check_state(self, session: Session) -> None:
         state = await self._host.state(session.pty_id)
+        if state and state["state"] == "asking" and session.waiting and session.prompt is None:
+            session.prompt = await self._host.prompt(session.pty_id)
+            if session.prompt is not None:
+                await self._emit("input-required", session, "")
+                return
         if not state or state["at"] <= session.last_event_at:
             return
         if state["state"] == "asking":

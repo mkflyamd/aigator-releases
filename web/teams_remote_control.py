@@ -9,7 +9,7 @@ recognized with an explicit "/code " prefix, so the self-chat stays usable
 for ordinary notes-to-self without every line being treated as terminal input.
 
 This "/code" path stays fire-and-forget: no confirmation is sent back to
-Teams. The "@gator" command grammar and its "[Gator" replies to the same
+Teams. The "@gator" command grammar and its crocodile-marked replies to the same
 self-chat live in web/remote/ and run in their own loop.
 """
 
