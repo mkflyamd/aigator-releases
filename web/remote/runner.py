@@ -1,12 +1,13 @@
 """Turns channel messages into service calls and service events into channel replies.
 
-Loop guards: Gator's own posts are ignored by the SYSTEM_PREFIX and by recorded post ids.
+Loop guards: Gator's own posts are ignored by the crocodile marker and by recorded post ids.
 Each batch advances the stored last-processed id before anything runs, so a crash or restart
 never runs a message twice."""
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from dataclasses import dataclass
@@ -14,7 +15,10 @@ from typing import Callable
 
 from remote import commands
 from remote.channel import AutosendOff, Channel, InboundMessage
+from remote import master as master_window
 from remote.guard import Guard, limit
+from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
+from remote.master import Master
 from remote.service import Aborted, Asleep, Event, Refusal, RemoteError, RemoteService, Session
 from remote.session_host import current_branch
 from remote.state import State
@@ -27,6 +31,7 @@ STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = "Waiting for your answer."
 _TAGS = ("gator", AGENT_LABEL.lower())
+_RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
 
 @dataclass
@@ -55,8 +60,10 @@ class RemoteRunner:
         state: State,
         clock: Callable[[], float] = time.time,
         stale_seconds: float | Callable[[], float] = STALE_SECONDS,
+        master: Master | None = None,
         first_prompt_hint: str = "",
         branch_of: Callable[[str], str | None] = current_branch,
+        peers: PeerDirectory | None = None,
     ):
         self._channel = channel
         self._service = service
@@ -64,11 +71,13 @@ class RemoteRunner:
         self._state = state
         self._clock = clock
         self._stale = stale_seconds
+        self._master = master or Master(state, clock)
         self._hint = first_prompt_hint
         self._branch_of = branch_of
+        self._peers = peers
         self._turns: dict[str, _Turn] = {}
         self._enabled = False
-        self._timeout_noticed = False
+        self._stop_failure_logged: float | None = None
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
@@ -77,22 +86,33 @@ class RemoteRunner:
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
-        """Arms on the off-to-on edge only, so the cap stays in force until the switch is turned
-        off and on again. `stop all` is stored, so it also holds across a backend restart."""
+        """The channel joins the shared window while its switch is on. `stop all` is stored, so it
+        holds across a backend restart until the switch is turned off and on again."""
         channel = self._channel.name
         if enabled and not self._enabled:
-            if not self._state.disarmed(channel):
-                self._guard.arm()
-            self._timeout_noticed = False
             self._autosend_noticed = False
         elif not enabled:
             if self._state.disarmed(channel):
                 self._state.set_disarmed(channel, False)
-            if self._enabled:
-                self._guard.disarm()
-            self._service.abort_wakes()
             self._window.close()
         self._enabled = enabled
+        self._sync_guard()
+
+    def _sync_guard(self) -> None:
+        if self._enabled and self._master.active() and not self._state.disarmed(self._channel.name):
+            self._guard.arm()
+        else:
+            self._guard.disarm()
+            self._service.abort_wakes()
+
+    @property
+    def live(self) -> bool:
+        """Armed now: the switch is on, the window is open, and `stop all` has not been sent."""
+        return self._enabled and self._guard.armed and self._master.active()
+
+    @property
+    def window_open(self) -> bool:
+        return self._master.active()
 
     async def restore(self) -> None:
         await self._service.restore()
@@ -141,7 +161,7 @@ class RemoteRunner:
                 continue
             await self._close_if_expired()
             command = commands.parse(message.text) or await self._untagged(message)
-            if command is None or not self._guard.armed:
+            if command is None or not self.live:
                 continue
             if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
@@ -172,11 +192,12 @@ class RemoteRunner:
         if len(text) > commands.UNTAGGED_MAX_CHARS:
             await self._note_not_sent(message, "too long", commands.too_long)
             return None
-        return commands.parse(f"@gator {text}")
+        command = commands.parse(f"@gator {text}")
+        return dataclasses.replace(command, tagged=False) if command else None
 
     async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
         """One plain line per reason per window, however many messages are held back."""
-        if reason in self._not_sent_noticed or not self._guard.armed:
+        if reason in self._not_sent_noticed or not self.live:
             return
         if self._clock() - message.created_at > limit(self._stale):
             return
@@ -219,7 +240,7 @@ class RemoteRunner:
             self._window.close()
             await self._post(commands.chat_closed_bye())
         elif kind == "list":
-            await self._post(self._describe(self._service.list()))
+            await self._post(await self._list_text())
         elif kind == "status":
             await self._post(self._status(command.name))
         elif kind == "stop":
@@ -227,7 +248,7 @@ class RemoteRunner:
         elif kind == "stop_all":
             await self._stop_all()
         else:
-            await self._send(command.text)
+            await self._send(command.text, command.tagged)
 
     async def _stop_all(self) -> None:
         stopped, failed = await self._service.stop_all()
@@ -256,6 +277,77 @@ class RemoteRunner:
             raise Refusal(commands.which_to_stop([s.short for s in sessions]))
         return sessions
 
+    def _reserved(self) -> frozenset[str]:
+        return _RESERVED_NAMES | {s.short for s in self._service.list()}
+
+    async def _peer_list(self, *, refresh: bool = False) -> list[Peer]:
+        """The other agents in the default project that can be messaged. A listing that fails is no
+        reason to refuse a command that is not about them."""
+        if self._peers is None:
+            return []
+        try:
+            project = self._service.default_project()
+            if project is None:
+                return []
+            exclude = {s.pty_id for s in self._service.list()}
+            return await self._peers.peers(project.id, exclude, refresh=refresh)
+        except Exception as exc:
+            _log.warning("Remote control could not list the other agents: %s", exc)
+            return []
+
+    async def _list_text(self) -> str:
+        peers = await self._peer_list(refresh=True)
+        reserved = self._reserved()
+        names = [p.name.casefold() for p in peers]
+        rows, reach = [], ""
+        for peer in peers[: commands.PEERS_SHOWN]:
+            by_name = addressable(peer, reserved) and names.count(peer.name.casefold()) == 1
+            token = peer.name if by_name else peer.short
+            reach = reach or token
+            shown = commands.peer_label(peer.name) if by_name else f"{commands.peer_label(peer.name)} ({peer.short})"
+            rows.append((shown, peer.state))
+        return commands.session_list(
+            [(s.short, s.project.name, _state_word(s)) for s in self._service.list()],
+            rows,
+            max(0, len(peers) - commands.PEERS_SHOWN),
+            reach,
+        )
+
+    async def _try_peer(self, text: str, colon_only: bool = False) -> bool:
+        """Sends `text` to the other agent its first words name. False when they name none."""
+        peers = await self._peer_list()
+        found = resolve_peer(peers, text, self._reserved(), colon_only) if peers else None
+        if found is None:
+            return False
+        if found.peer is None:
+            first = found.candidates[0]
+            await self._audit_refusal(first.name, "ambiguous_name", "Several agents share that name.", text)
+            raise Refusal(commands.peer_ambiguous(first.name, [(p.short, p.state) for p in found.candidates]))
+        await self._message_peer(found.peer, found.text)
+        return True
+
+    async def _audit_refusal(self, peer_name: str, code: str, reason: str, text: str) -> None:
+        import agent_wake
+
+        sender = {"name": f"{self._channel.name.title()} chat"}
+        try:
+            await asyncio.to_thread(agent_wake.audit_refusal, sender, peer_name, code, reason, text)
+        except Exception:
+            _log.warning("could not audit a refused message to %s", peer_name, exc_info=True)
+
+    async def _message_peer(self, peer: Peer, text: str) -> None:
+        if not text:
+            raise Refusal(commands.mention_needs_text(commands.peer_label(peer.name)))
+        wait = self._peers.limiter.wait_seconds(peer.session_id)
+        if wait:
+            await self._audit_refusal(peer.name, "peer_limit", "The hourly limit for that agent was reached.", text)
+            raise Refusal(commands.peer_limit(peer.name, self._peers.limiter.limit, wait))
+        try:
+            woke = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
+        except PeerRefused as exc:
+            raise Refusal(commands.peer_refused(peer.name, exc.reason)) from exc
+        await self._post(commands.peer_sent(peer.name, woke))
+
     def _describe(self, sessions: list[Session]) -> str:
         return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
 
@@ -269,10 +361,11 @@ class RemoteRunner:
             s.short, _state_word(s), since, s.last_activity, project=s.project.name, several=self._several(s)
         )
 
-    async def _send(self, text: str) -> None:
+    async def _send(self, text: str, tagged: bool = True) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
         waiting session if exactly one waits, else the only running one, else a new session in the
-        default project."""
+        default project. Another agent in the project is reached by its name, and only when the message
+        carries the `@gator` tag: an open chat window never routes to one."""
         mention = commands.LEADING_MENTION_RE.match(text)
         if mention:
             name, rest = mention.group(1), (mention.group(2) or "").strip()
@@ -283,6 +376,8 @@ class RemoteRunner:
                 await self._deliver(session, rest)
                 return
             if name.lower() not in _TAGS:
+                if tagged and await self._try_peer(text):
+                    return
                 recent = sorted(self._service.list(), key=lambda s: s.last_activity, reverse=True)
                 raise Refusal(commands.unknown_mention(name, [s.short for s in recent]))
             if not rest:
@@ -296,6 +391,10 @@ class RemoteRunner:
             return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
+        # A waiting session is being answered: the answer may start with a peer's name, so only
+        # `name: text` reaches the peer then.
+        if tagged and await self._try_peer(text, colon_only=bool(waiting)):
+            return
         if len(waiting) == 1:
             await self._deliver(waiting[0], text)
         elif len(sessions) == 1:
@@ -357,6 +456,8 @@ class RemoteRunner:
         self._turns[session.id] = _Turn(started=now, last_note=now)
 
     async def _on_event(self, event: Event) -> None:
+        if not self.live:
+            return
         session = event.session
         short = session.short
         turn = self._turns.pop(session.id, None)
@@ -419,14 +520,66 @@ class RemoteRunner:
                 )
 
     async def tick(self) -> None:
-        if self._guard.expired():
-            self._guard.disarm()
-            self._window.close()
-            if not self._timeout_noticed:
-                self._timeout_noticed = True
-                await self._post(commands.timed_out(self._guard.armed_max_seconds))
-            return
-        if self._guard.armed:
+        self._sync_guard()
+        if self._master.expired():
+            await self._expire()
+        elif self.live:
+            await self._warn_if_due()
+        if self.live:
             await self._close_if_expired()
-            await self._service.tick()
             await self._report_progress()
+        await self._service.tick()
+
+    @property
+    def deadline_pending(self) -> bool:
+        """The window has closed and this channel's sessions have not been stopped for it yet."""
+        return self._unhandled_deadline() is not None
+
+    def _unhandled_deadline(self) -> float | None:
+        record = self._master.record()
+        if record is None or not self._master.expired():
+            return None
+        if self._state.channel_value(self._channel.name, "expiry_handled") == record["deadline"]:
+            return None
+        return record["deadline"]
+
+    async def _stop_at_deadline(self) -> bool:
+        """Stops every session the way `stop all` does. A session that will not stop is retried on
+        the next tick, so the caller only goes on once none are left. True when the stop
+        finished for a window that is still closed."""
+        deadline = self._unhandled_deadline()
+        if deadline is None:
+            return False
+        stopped, failed = await self._service.stop_all()
+        if failed:
+            if self._stop_failure_logged != deadline:
+                self._stop_failure_logged = deadline
+                _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
+            return False
+        self._state.set_channel_value(self._channel.name, "expiry_handled", deadline)
+        if self._master.active():
+            return False
+        self._guard.stop_all()
+        self._window.close()
+        return True
+
+    async def stop_after_deadline(self) -> None:
+        """A channel whose switch is off still stops its sessions at the deadline, and says nothing."""
+        await self._stop_at_deadline()
+
+    async def _expire(self) -> None:
+        if await self._stop_at_deadline():
+            await self._post(commands.timed_out(master_window.ARM_SECONDS))
+
+    async def _warn_if_due(self) -> None:
+        record = self._master.record()
+        if record is None:
+            return
+        deadline = record["deadline"]
+        channel = self._channel.name
+        if self._master.remaining() > master_window.WARN_SECONDS:
+            return
+        if self._state.channel_value(channel, "warned") == deadline:
+            return
+        self._state.set_channel_value(channel, "warned", deadline)
+        await self._post(commands.turns_off_soon(master_window.WARN_SECONDS))

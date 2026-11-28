@@ -1,4 +1,4 @@
-"""Human-inbound guard rails: absolute arm cap, command rate limit, stop-all registry.
+"""Human-inbound guard rails: armed flag, command rate limit, stop-all registry.
 
 Components depend on this small interface only, so the cross-agent relay can share it
 or replace it with an adapter later."""
@@ -15,7 +15,6 @@ _log = logging.getLogger(__name__)
 
 RATE_LIMIT = 20
 RATE_WINDOW_SECONDS = 600.0
-ARMED_MAX_SECONDS = 24 * 3600.0
 
 
 def limit(value: float | Callable[[], float]) -> float:
@@ -29,30 +28,25 @@ class Guard:
         clock: Callable[[], float] = time.time,
         rate_limit: int = RATE_LIMIT,
         rate_window: float = RATE_WINDOW_SECONDS,
-        armed_max_seconds: float | Callable[[], float] = ARMED_MAX_SECONDS,
     ):
         self._clock = clock
         self._rate_limit = rate_limit
         self._rate_window = rate_window
-        self._armed_max = armed_max_seconds
-        self._armed_at: float | None = None
+        self._armed = False
         self._events: deque[float] = deque()
         self._slow_notice_at: float | None = None
         self._stops: dict[str, Callable[[], None]] = {}
         self._lock = threading.Lock()
 
     def arm(self) -> None:
-        self._armed_at = self._clock()
+        self._armed = True
 
     def disarm(self) -> None:
-        self._armed_at = None
-
-    def expired(self) -> bool:
-        return self._armed_at is not None and self._clock() - self._armed_at >= limit(self._armed_max)
+        self._armed = False
 
     @property
     def armed(self) -> bool:
-        return self._armed_at is not None and not self.expired()
+        return self._armed
 
     def allow_command(self) -> bool:
         now = self._clock()

@@ -1,7 +1,7 @@
 """The @gator command grammar and reply formatting, independent of any channel.
 
 Every message Gator posts follows the copy deck: the prefix and state on line 1, the body, a blank
-line, then a `Next:` block of options. SYSTEM_PREFIX is the one prefix constant; the loop guard reads it."""
+line, then a `Next:` block of options. Every post opens with the crocodile marker `[🐊`; the loop guard keys on it."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
+
+from remote import settings
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
@@ -24,9 +26,11 @@ TOO_LONG_BODY = "That message is too long to run from this chat, so it was not s
 TOO_LONG_OPTIONS = ["Start it with `@gator` to send it anyway.", "Or shorten it and send it again."]
 ATTACHMENT_BODY = "Attachments are not sent from this chat."
 ATTACHMENT_OPTION = "Describe what you need in text, and send that."
-SYSTEM_PREFIX = "[Gator"
 SETTINGS_SECTION = "Remote control"
 CROC = "\U0001F40A"
+MARKER = f"[{CROC}"
+MARKER_SHORTCODE = "[:crocodile:"
+LEGACY_PREFIX = "[Gator"
 BULLET = "•"
 DOT = "·"
 CHOICES_SHOWN = 2
@@ -38,8 +42,9 @@ ELAPSED_MIN_SECONDS = 60.0
 SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
-OWN_MESSAGE_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
+LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
 UNKNOWN_MENTION_SHOWN = 3
+PEERS_SHOWN = 8
 LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 
@@ -48,6 +53,7 @@ class Command:
     kind: str  # send | list | status | stop | stop_all | help | open | bye
     name: str | None = None
     text: str = ""
+    tagged: bool = True  # False for an ordinary message routed by the open chat window
 
 
 def _cap_bytes(text: str) -> str:
@@ -89,18 +95,23 @@ def _tidy(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def system_reply(body: str, options: list[str], *, croc: bool = False, after: str = "") -> str:
-    """A [Gator] notice: the state and body, a blank line, the Next block, then an optional closing line."""
-    mark = f" {CROC}" if croc else ""
+def app_prefix() -> str:
+    """The app voice: `[🐊 Gator]`."""
+    return f"[{CROC} {settings.agent_name()}]"
+
+
+def system_reply(body: str, options: list[str], *, after: str = "") -> str:
+    """An app notice: the state and body, a blank line, the Next block, then an optional closing line."""
     tail = f"\n\n{after}" if after else ""
-    return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}")
+    return _tidy(f"{app_prefix()} {body}\n\n{next_block(options)}{tail}")
 
 
 def agent_prefix(session: str, project: str | None = None, several: bool = False) -> str:
-    """`[Gator - {project}] 🐊`, or `[Gator - {session} - {project}] 🐊` while several sessions are live."""
+    """`[🐊 Gator - {project}]`, or `[🐊 Gator - {session} - {project}]` while several sessions are live.
+    The project slot is always there: it is what tells an agent reply from the app voice."""
     project = project or session
     tag = f"{session} - {project}" if several else project
-    return f"{SYSTEM_PREFIX} - {tag}] {CROC}"
+    return f"[{CROC} {settings.agent_name()} - {tag}]"
 
 
 def agent_reply(
@@ -111,8 +122,10 @@ def agent_reply(
 
 
 def is_own_message(text: str) -> bool:
-    """A message Gator wrote: the fixed `[Gator` start, or any `[label] 🐊` start, so the agent label can change."""
-    return text.lstrip().startswith(SYSTEM_PREFIX) or bool(OWN_MESSAGE_RE.match(text.lstrip()))
+    """A message Gator wrote: it starts with the crocodile marker (as the emoji or Slack's shortcode), whatever
+    the configured name. The older `[Gator` and `[label] 🐊` starts count too, so earlier posts stay ignored."""
+    text = text.lstrip()
+    return text.startswith((MARKER, MARKER_SHORTCODE, LEGACY_PREFIX)) or bool(LEGACY_OWN_RE.match(text))
 
 
 def in_words(seconds: float) -> str:
@@ -156,7 +169,6 @@ def greeting() -> str:
     return system_reply(
         f"Gator on watch. This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
         _tip_options(True),
-        croc=True,
         after=_quiet_note(),
     )
 
@@ -185,18 +197,25 @@ def already_open() -> str:
 
 def chat_closed_quiet() -> str:
     return system_reply(
-        f"Chat closed after {in_words(WINDOW_SECONDS)} of quiet.", ["`@gator hi` to open it again."], croc=True
+        f"Chat closed after {in_words(WINDOW_SECONDS)} of quiet.", ["`@gator hi` to open it again."]
     )
 
 
 def chat_closed_bye() -> str:
-    return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."], croc=True)
+    return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."])
 
 
 def timed_out(seconds: float) -> str:
     return system_reply(
         f"Remote control turned itself off after {in_words(seconds)}.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
+def turns_off_soon(seconds: float) -> str:
+    return system_reply(
+        f"Remote control turns off in {in_words(seconds)}.",
+        [f"Need more time? Open AI Gator, then Settings, then {SETTINGS_SECTION}, and turn it back on."],
     )
 
 
@@ -247,19 +266,74 @@ def session_not_found(name: str) -> str:
     return system_reply(f"No session named {shown}.", ["`list` to see what is running."])
 
 
-def session_list(rows: list[tuple[str, str, str]]) -> str:
-    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE."""
-    if not rows:
+def session_list(
+    rows: list[tuple[str, str, str]], peers: list[tuple[str, str]] | None = None, more: int = 0, reach: str = ""
+) -> str:
+    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE. peers are other agents
+    in the project as (name, state), already capped; `more` is how many were left out and `reach` is
+    a name that can be typed to message one of them."""
+    peers = peers or []
+    if not rows and not peers:
         return no_sessions()
-    head = f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:"
-    lines = [f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1)]
-    waiting = next((name for name, _, state in rows if state == WAITING), None)
-    first = (
-        f"`{waiting}: your answer` to answer the one that is waiting."
-        if waiting
-        else f"`{rows[0][0]}: your request` to talk to a session."
+    parts = []
+    if rows:
+        parts.append(f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:")
+        parts.extend(f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1))
+    else:
+        parts.append("No remote sessions are running.")
+    if peers:
+        parts.append("\nOther agents in this project:")
+        parts.extend(f"- {name} {DOT} {state}" for name, state in peers)
+        if more:
+            parts.append(f"- {more} more.")
+    options = []
+    if rows:
+        waiting = next((name for name, _, state in rows if state == WAITING), None)
+        options.append(
+            f"`{waiting}: your answer` to answer the one that is waiting."
+            if waiting
+            else f"`{rows[0][0]}: your request` to talk to a session."
+        )
+        options.append(f"`status {rows[0][0]}` for details.")
+    else:
+        options.append("Send a request and it starts a new session.")
+    if peers:
+        options.append(f"`@gator {reach or peers[0][0]} your message` to message another agent.")
+    if rows:
+        options.append("`stop all` to stop everything and turn Remote control off.")
+    return system_reply("\n".join(parts), options)
+
+
+def peer_label(name: str) -> str:
+    """A session name from outside this chat, flattened to one line and capped."""
+    return " ".join(name.split())[:NAME_MAX_CHARS]
+
+
+def peer_sent(name: str, woke: bool) -> str:
+    body = f"Woke {peer_label(name)} and sent your message." if woke else f"Sent to {peer_label(name)}."
+    return system_reply(body, ["Its reply shows in its own terminal in AI Gator."])
+
+
+def peer_refused(name: str, reason: str) -> str:
+    return system_reply(
+        f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]
     )
-    return system_reply("\n".join([head, *lines]), [first, f"`status {rows[0][0]}` for details.", "`stop all` to stop everything and turn Remote control off."])
+
+
+def peer_limit(name: str, limit: int, wait_seconds: float) -> str:
+    return system_reply(
+        f"That is {limit} messages to {peer_label(name)} in the last hour, the most allowed. Not sent.",
+        [f"Wait {in_words(wait_seconds)}, then send it again.", f"Raise the limit in Settings, under {SETTINGS_SECTION}."],
+    )
+
+
+def peer_ambiguous(name: str, choices: list[tuple[str, str]]) -> str:
+    """Several agents share a name. choices are (short id, state); the id is what to type instead."""
+    lines = [f"- `{short}` {DOT} {state}" for short, state in choices]
+    return system_reply(
+        f"More than one agent is called {peer_label(name)}:\n" + "\n".join(lines),
+        [f"`{choices[0][0]} your message` to pick one by its id."],
+    )
 
 
 def which_session(names: list[str]) -> str:
@@ -278,7 +352,7 @@ def unknown_mention(name: str, known: list[str]) -> str:
     shown = " ".join(name.split())[:NAME_MAX_CHARS]
     body = f"I don't know {shown}. Start with `@gator` to send it to the agent."
     if not known:
-        return _tidy(f"{SYSTEM_PREFIX}] {body}")
+        return _tidy(f"{app_prefix()} {body}")
     return system_reply(body, [f"`{n}: your message`" for n in known[:UNKNOWN_MENTION_SHOWN]])
 
 

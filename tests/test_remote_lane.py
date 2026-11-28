@@ -508,7 +508,7 @@ async def test_lanes_of_different_projects_sleep_and_wake_independently(w):
     await w.feed(w.msg(103, "@gator budget second task"))
     await woken(w)
     assert [p for p, _, _ in w.host.woken] == ["pty-1"]
-    assert any(text.startswith("[Gator - budget - Budget]") for text in w.channel.posted)
+    assert any(text.startswith(commands.agent_prefix("budget", "Budget", True)) for text in w.channel.posted)
 
 
 async def test_a_message_to_a_lane_the_sweep_suspended_since_the_last_tick_still_wakes_it(w):

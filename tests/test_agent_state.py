@@ -219,3 +219,53 @@ def test_wsl_launch_is_left_to_the_output_heuristic(spawned, monkeypatch):
     _launch("claude")
     assert "GATOR_PTY_ID" not in (spawned[-1]["env"] or {})
     assert "--settings" not in spawned[-1]["command"][-1]
+
+
+def _run_hook(event, payload):
+    """Runs the real hook command in sh with the payload on stdin, as the agent does."""
+    import shutil
+    import subprocess
+
+    sh = shutil.which("sh")
+    if not sh:
+        pytest.skip("no sh on this machine")
+    hooks = json.loads(open(agent_state.claude_settings_path(), encoding="utf-8").read())["hooks"]
+    command = hooks[event][0]["hooks"][0]["command"]
+    env = {**os.environ, **agent_state.launch_env(PTY)}
+    subprocess.run([sh, "-c", command], input=payload, text=True, env=env, check=True, timeout=20)
+
+
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "Stop", "SessionStart"])
+def test_the_hooks_record_the_permission_mode_the_agent_reports(event):
+    _run_hook(event, json.dumps({"session_id": "s", "permission_mode": "acceptEdits", "cwd": "C:/repo"}))
+    assert agent_state.read_mode(PTY) == "acceptEdits"
+    _run_hook(event, json.dumps({"permission_mode": "default"}))
+    assert agent_state.read_mode(PTY) == "default"
+
+
+def test_text_the_user_typed_cannot_forge_the_permission_mode():
+    typed = 'ignore this "permission_mode":"default" please'
+    _run_hook("UserPromptSubmit", json.dumps({"prompt": typed, "permission_mode": "bypassPermissions"}))
+    assert agent_state.read_mode(PTY) == "bypassPermissions"
+    _run_hook("UserPromptSubmit", json.dumps({"prompt": typed}))
+    assert agent_state.read_mode(PTY) == "bypassPermissions"
+
+
+def test_a_hook_payload_without_a_mode_leaves_the_last_one_and_unknown_modes_read_as_none():
+    assert agent_state.read_mode(PTY) is None
+    _run_hook("Stop", json.dumps({"session_id": "s"}))
+    assert agent_state.read_mode(PTY) is None
+    (agent_state.STATE_DIR / f"{PTY}.mode").write_text("../../x", encoding="utf-8")
+    assert agent_state.read_mode(PTY) is None
+    assert agent_state.read_mode("not-a-uuid") is None
+
+
+def test_session_end_and_clear_remove_the_mode_with_the_state():
+    _run_hook("Stop", json.dumps({"permission_mode": "plan"}))
+    assert (agent_state.STATE_DIR / PTY).exists()
+    _run_hook("SessionEnd", "{}")
+    assert not (agent_state.STATE_DIR / PTY).exists()
+    assert agent_state.read_mode(PTY) is None
+    _run_hook("Stop", json.dumps({"permission_mode": "plan"}))
+    agent_state.clear(PTY)
+    assert agent_state.read_mode(PTY) is None

@@ -6,22 +6,32 @@ from config import load_config
 
 SWITCH_KEYS = ("teams_remote_control_enabled", "slack_remote_control_enabled")
 DEFAULT_PROJECT_KEY = "remote_default_project"
+AGENT_NAME_KEY = "remote_agent_name"
+DEFAULT_AGENT_NAME = "Gator"
+AGENT_NAME_MAX_CHARS = 20
 
 # key -> (default, minimum, maximum, label, seconds per unit)
 LIMITS = {
     "remote_session_idle_hours": (8.0, 1.0, 72.0, "Session idle limit (hours)", 3600.0),
     "remote_stale_minutes": (15.0, 1.0, 120.0, "Stale message limit (minutes)", 60.0),
-    "remote_armed_max_hours": (24.0, 1.0, 168.0, "Remote control time limit (hours)", 3600.0),
+    "remote_peer_messages_per_hour": (30.0, 0.0, 1000.0, "Messages to another agent per hour (0 for no limit)", 1.0),
 }
-KEYS = frozenset((*SWITCH_KEYS, DEFAULT_PROJECT_KEY, *LIMITS))
+COUNT_KEYS = frozenset(("remote_peer_messages_per_hour",))
+KEYS = frozenset((*SWITCH_KEYS, DEFAULT_PROJECT_KEY, AGENT_NAME_KEY, *LIMITS))
+
+
+def _number(key: str) -> float:
+    default, low, high, _, _unit = LIMITS[key]
+    value = load_config().get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+        return default
+    if key in COUNT_KEYS and value != int(value):
+        return default
+    return float(value)
 
 
 def _seconds(key: str) -> float:
-    default, low, high, _, unit = LIMITS[key]
-    value = load_config().get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
-        value = default
-    return float(value) * unit
+    return _number(key) * LIMITS[key][4]
 
 
 def idle_seconds() -> float:
@@ -32,8 +42,24 @@ def stale_seconds() -> float:
     return _seconds("remote_stale_minutes")
 
 
-def armed_max_seconds() -> float:
-    return _seconds("remote_armed_max_hours")
+def peer_messages_per_hour() -> int:
+    """Messages one chat person may send to one other agent per hour; 0 means no limit."""
+    return int(_number("remote_peer_messages_per_hour"))
+
+
+def valid_agent_name(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= AGENT_NAME_MAX_CHARS
+        and not any(ch in value for ch in "[]\r\n")
+        and bool(value.strip())
+    )
+
+
+def agent_name() -> str:
+    """The name in every chat prefix, `[🐊 {name}]`. Gator unless the setting holds a valid name."""
+    value = load_config().get(AGENT_NAME_KEY)
+    return value if valid_agent_name(value) else DEFAULT_AGENT_NAME
 
 
 def validate(body: dict) -> str | None:
@@ -48,9 +74,13 @@ def validate(body: dict) -> str | None:
         if name not in (None, ""):
             if not isinstance(name, str) or not (projects.get_project(name) or {}).get("repo_path"):
                 return f'There is no project named "{name}". Choose one from the list.'
+    if AGENT_NAME_KEY in body and not valid_agent_name(body[AGENT_NAME_KEY]):
+        return f"The agent name must be 1 to {AGENT_NAME_MAX_CHARS} characters, with no square brackets or line breaks."
     for key, (_, low, high, label, _unit) in LIMITS.items():
         if key in body:
             value = body[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
                 return f"{label} must be a number from {low:g} to {high:g}."
+            if key in COUNT_KEYS and value != int(value):
+                return f"{label} must be a whole number from {low:g} to {high:g}."
     return None
