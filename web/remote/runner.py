@@ -116,6 +116,7 @@ class RemoteRunner:
         self._unsent: dict[tuple[str, str], float] = {}
         self._unrecorded: set[tuple[str, str]] = set()
         self._wakes: set[asyncio.Task] = set()
+        self._outbox: dict[str, list[str]] = {}
         self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
 
@@ -600,6 +601,13 @@ class RemoteRunner:
             return
         busy = session.awaiting_since is not None and session.kind == STARTED
         elapsed = self._clock() - self._since(session)
+        if busy or self._outbox.get(session.id):
+            self._turns.setdefault(session.id, _Turn(started=self._clock() - elapsed, last_note=self._clock()))
+            self._enqueue(session, text)
+            await self._post(
+                self._lane_copy(commands.busy_queued, session, elapsed, await self._service.last_step(session))
+            )
+            return
         try:
             await self._service.send(session.id, text)
         except Asleep:
@@ -612,15 +620,45 @@ class RemoteRunner:
                 self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
             ) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
-        if not busy:
-            self._begin(session)
-            return
-        self._turns.setdefault(session.id, _Turn(started=self._clock() - elapsed, last_note=self._clock()))
-        await self._post(
-            self._lane_copy(
-                commands.busy_queued, session, elapsed, await self._service.last_step(session)
-            )
-        )
+        self._begin(session)
+
+    def _enqueue(self, session: Session, text: str) -> None:
+        """A message to a working session is typed in order by a task of its own: typing waits for the session
+        to take input, which can take minutes, and the polling loop must not wait with it."""
+        box = self._outbox.setdefault(session.id, [])
+        box.append(text)
+        if len(box) == 1:
+            task = asyncio.create_task(self._drain(session, box))
+            self._wakes.add(task)
+            task.add_done_callback(self._wakes.discard)
+
+    async def _drain(self, session: Session, box: list[str]) -> None:
+        try:
+            while box:
+                text = box[0]
+                if session.stopping or not self._guard.armed:
+                    box.clear()
+                    return
+                try:
+                    await self._service.send(session.id, text)
+                except Asleep:
+                    await self._start_wake(session, text)
+                except Refusal as exc:
+                    await self._post(str(exc))
+                except RemoteError as exc:
+                    if not session.stopping:
+                        await self._post(
+                            self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
+                        )
+                except Exception:
+                    _log.warning("Remote send to %s failed", session.short, exc_info=True)
+                    await self._post(self._lane_copy(commands.send_failed, session, "It could not be typed."))
+                else:
+                    self._state.clear_prompt_messages(self._channel.name, session.id)
+                box.pop(0)
+        finally:
+            if self._outbox.get(session.id) is box:
+                del self._outbox[session.id]
 
     async def _answer(
         self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False

@@ -329,7 +329,7 @@ async def test_a_send_that_finds_the_process_suspended_meanwhile_wakes_instead_o
     await w.feed(w.msg(102, "@gator second task"))
     w.host.suspend_on_deliver = False
     await woken(w)
-    assert w.channel.posted[0] == commands.waking("budget", project="Budget")
+    assert commands.waking("budget", project="Budget") in w.channel.posted
     assert [p for p, _, _ in w.host.woken] == ["pty-1"]
     assert w.host.delivered[-1] == ("pty-1", "second task")
 

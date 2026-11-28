@@ -172,3 +172,60 @@ def test_nothing_done_since_the_newest_request_is_no_step(tmp_path):
 
 def test_an_agent_without_a_claude_transcript_has_no_step(tmp_path):
     assert agent_sessions.last_step({"agent": "codex", "path": str(tmp_path / "none.jsonl")}) == ""
+
+
+def _gate_deliveries(w):
+    """Typing into the session waits until the test lets it through, as it does while the session is busy."""
+    gate = asyncio.Event()
+    real = w.host.deliver
+
+    async def deliver(pty_id, text):
+        await gate.wait()
+        await real(pty_id, text)
+
+    w.host.deliver = deliver
+    return gate
+
+
+async def test_a_message_to_a_busy_session_is_answered_at_once_and_does_not_stall_the_loop(w):
+    await opened(w)
+    await say(w, "run the tests")
+    gate = _gate_deliveries(w)
+    w.channel.posted.clear()
+    await asyncio.wait_for(say(w, "also update the docs"), 5)
+    assert "queued" in w.channel.posted[-1]
+    assert w.host.delivered == [("pty-1", "run the tests")]
+    await asyncio.wait_for(w.runner.tick(), 5)
+    gate.set()
+    await asyncio.gather(*list(w.runner._wakes))
+    assert w.host.delivered[-1] == ("pty-1", "also update the docs")
+
+
+async def test_messages_to_a_busy_session_are_typed_in_the_order_they_were_sent(w):
+    await opened(w)
+    await say(w, "run the tests")
+    gate = _gate_deliveries(w)
+    await say(w, "one")
+    await say(w, "two")
+    await say(w, "three")
+    gate.set()
+    await asyncio.gather(*list(w.runner._wakes))
+    assert [t for _, t in w.host.delivered] == ["run the tests", "one", "two", "three"]
+    assert w.runner._outbox == {}
+
+
+async def test_a_queued_message_that_cannot_be_typed_says_so(w):
+    from remote.session_host import HostError
+
+    await opened(w)
+    await say(w, "run the tests")
+
+    async def refuse(pty_id, text):
+        raise HostError("Someone is using that session in AI Gator right now.")
+
+    w.host.deliver = refuse
+    w.channel.posted.clear()
+    await say(w, "also update the docs")
+    await asyncio.gather(*list(w.runner._wakes))
+    assert "queued" in w.channel.posted[0]
+    assert "Someone is using that session" in w.channel.posted[-1]
