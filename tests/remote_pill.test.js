@@ -326,6 +326,22 @@ test('every server state maps to the card the design shows', () => {
   assert(/class="rcp-btn is-primary" data-rcp="restart"/.test(pill.cardHtml(quarter)));
 });
 
+test('the sub line names only the channels that are switched on', () => {
+  const only = (teams, slack) => [
+    { name: 'teams', enabled: teams, armed: teams },
+    { name: 'slack', enabled: slack, armed: slack },
+  ];
+  const sub = (state, channels) =>
+    pill.viewModel(running(8 * 3600, { state, channels }), 8 * 3600).sub;
+  assert.strictEqual(sub('on', only(true, true)), 'Teams and Slack');
+  assert.strictEqual(sub('on', only(true, false)), 'Teams');
+  assert.strictEqual(sub('on', only(false, true)), 'Slack');
+  const offSub = (channels) => pill.viewModel(base({ state: 'off', channels }), 0).sub;
+  assert(/from Teams\. Turns itself off/.test(offSub(only(true, false))));
+  assert(/from Slack\. Turns itself off/.test(offSub(only(false, true))));
+  assert(/from Teams and Slack\. Turns itself off/.test(offSub(only(true, true))));
+});
+
 test('time copy drops zero parts and never splits across lines', () => {
   const left = (min) => pill.viewModel(running(min * 60), min * 60).timer;
   assert.strictEqual(left(660).text, '11 h left');

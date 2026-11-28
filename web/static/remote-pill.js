@@ -97,6 +97,16 @@
 
   const ON_STATES = ['on', 'warn_1h', 'warn_15m'];
 
+  const CHANNEL_LABELS = { teams: 'Teams', slack: 'Slack' };
+
+  // Names only the channels that are switched on, e.g. "Teams", "Slack" or "Teams and Slack".
+  function enabledChannels(status) {
+    const names = ((status && status.channels) || [])
+      .filter((c) => c.enabled)
+      .map((c) => CHANNEL_LABELS[c.name] || c.name);
+    return names.join(' and ');
+  }
+
   // True while a window is running, including when replies are off after turning it on.
   function windowOpen(status) {
     if (!status) return false;
@@ -137,7 +147,7 @@
         spoken: quarter ? 'Turns off in ' + leftSpoken(minutes) : leftSpoken(minutes) + ' left',
         minutes,
       };
-      view.sub = quarter ? '' : 'Teams and Slack';
+      view.sub = quarter ? '' : enabledChannels(status);
       if (hour && !quarter) {
         view.note = 'Turns off soon. Restart to keep it on.';
         view.noteWarn = true;
@@ -178,7 +188,12 @@
       view.title = 'Remote control is off';
       view.sub = reason;
     } else {
-      view.sub = 'Message ' + AGENT + ' from Teams and Slack. Turns itself off after 12 hours.';
+      view.sub =
+        'Message ' +
+        AGENT +
+        ' from ' +
+        (enabledChannels(status) || 'Teams or Slack') +
+        '. Turns itself off after 12 hours.';
     }
     return view;
   }
@@ -459,7 +474,7 @@
         const next = await work();
         if (next && next.state) take(next);
         else await refresh();
-        if (done) say(done);
+        if (done) say(typeof done === 'function' ? done(next) : done);
       } catch (error) {
         showError(error.message);
         await refresh();
@@ -473,7 +488,10 @@
     const disarm = () => call('POST', '/api/remote/disarm');
 
     function turnOn() {
-      return act(arm, 'Remote control on for 12 hours. Teams and Slack.');
+      return act(arm, (next) => {
+        const names = enabledChannels(next || status);
+        return 'Remote control on for 12 hours.' + (names ? ' ' + names + '.' : '');
+      });
     }
 
     function turnOnReplies() {
