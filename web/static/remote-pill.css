@@ -253,6 +253,21 @@
   background: var(--surface);
   color: var(--text);
 }
+.rcp-sheet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+.rcp-sheet::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.rcp-sheet::-webkit-scrollbar-track {
+  background: transparent;
+}
+.rcp-sheet::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 4px;
+}
 .rcp-sheet h3 {
   margin: 0 0 6px;
   font-size: 1.1rem;
