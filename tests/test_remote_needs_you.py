@@ -3,12 +3,18 @@ reply to one prompt message answers that prompt and no other."""
 
 import pytest
 
+import agent_handoff
+import agent_state
 from remote import commands, prompts
 from remote.channel import InboundMessage
+from remote.service import Session
+from remote.session_host import LocalPtyHost
+from routes import terminal
 from tests.test_remote_chat_window import MINUTE, opened, say
 from tests.test_remote_prompt_flow import routed, show
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
 from tests.test_remote_runner import BUDGET, World
+from tests.test_remote_session_host import BASH_DIALOG, FAKE_KEY, PTY, _Screen, _show
 
 
 @pytest.fixture
@@ -277,3 +283,56 @@ async def test_a_quote_reply_to_a_long_command_only_accepts_deny(w):
     assert w.host.typed == []
     await quote_reply(w, posted, "deny")
     assert w.host.typed == [("pty-1", (prompts.ESCAPE,))]
+
+
+@pytest.fixture
+def real(w, tmp_path, monkeypatch):
+    """The real host's answer checks, over a fake terminal, behind the runner."""
+    monkeypatch.setattr(agent_state, "STATE_DIR", tmp_path / "agent-state")
+    agent_state.STATE_DIR.mkdir()
+    monkeypatch.setattr(agent_handoff, "_configured_api_keys", lambda: [FAKE_KEY])
+    monkeypatch.setattr(prompts, "KEY_PAUSE_SECONDS", 0)
+    screen = _Screen(BASH_DIALOG)
+    keys = []
+    monkeypatch.setattr(terminal, "get_pty_session", lambda pty: screen)
+    monkeypatch.setattr(terminal, "is_pty_alive", lambda pty: True)
+    monkeypatch.setattr(terminal, "write_pty_session", lambda pty, key: keys.append(key) or True)
+    w.host = LocalPtyHost()
+    w.build()
+    now = w.clock.now
+    session = Session(
+        id=f"pty:{PTY}", pty_id=PTY, project=BUDGET, short="budget", vendor_session_id=None,
+        created_at=now, last_activity=now, awaiting_since=now,
+    )
+    w.service._sessions[session.id] = session
+    w.screen, w.keys = screen, keys
+    return w
+
+
+async def real_prompt(w, payload):
+    await opened(w)
+    _show(payload)
+    await w.runner.tick()
+    return routed(w)[0]["message_id"] if routed(w) else None
+
+
+async def test_a_quote_reply_allow_is_typed_when_the_real_checks_pass(real):
+    posted = await real_prompt(real, {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}})
+    await quote_reply(real, posted, "allow")
+    assert real.keys == [prompts.ENTER]
+
+
+async def test_a_quote_reply_types_nothing_when_the_user_typed_at_the_terminal_after_the_prompt(real):
+    posted = await real_prompt(real, {"tool_name": "Bash", "cwd": "C:/repo", "tool_input": {"command": "echo hi"}})
+    real.screen.last_user_input = real.service.list()[0].prompt.at + 1
+    await quote_reply(real, posted, "allow")
+    assert real.keys == []
+    assert real.channel.posted[-1] == f"[🐊 Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
+
+
+async def test_a_quote_reply_allow_for_a_tool_outside_bash_edit_and_write_is_refused(real):
+    posted = await real_prompt(real, {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}})
+    await quote_reply(real, posted, "allow")
+    assert real.keys == []
+    assert "Not sent: this one has to be answered in AI Gator." in real.channel.posted[-1]
+    assert "`allow`" not in real.channel.posted[-1]
