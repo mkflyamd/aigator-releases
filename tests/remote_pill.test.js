@@ -81,6 +81,9 @@ class FakeEl {
   closest() {
     return null;
   }
+  matches() {
+    return false;
+  }
   querySelectorAll() {
     return [];
   }
