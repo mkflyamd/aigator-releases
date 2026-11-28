@@ -216,6 +216,13 @@ def turns_off_soon(seconds: float) -> str:
     )
 
 
+def not_armed() -> str:
+    return system_reply(
+        "Remote control is not turned on.",
+        [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
         "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
