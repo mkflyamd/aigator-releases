@@ -17,7 +17,7 @@ from remote import commands
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
 from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
-from remote.service import Event, RemoteError, RemoteService, Session
+from remote.service import ADOPTED, Event, RemoteError, RemoteService, Session
 from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
@@ -27,7 +27,7 @@ _log = logging.getLogger(__name__)
 
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
-WAITING_HEADLINE = "Waiting for your answer."
+WAITING_HEADLINE = commands.WAITING_HEADLINE
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
@@ -320,10 +320,13 @@ class RemoteRunner:
             await self._audit_refusal(peer.name, "peer_limit", "The hourly limit for that agent was reached.", text)
             raise _Reply(commands.peer_limit(peer.name, self._peers.limiter.limit, wait))
         try:
-            woke = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
+            delivery = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
         except PeerRefused as exc:
             raise _Reply(commands.peer_refused(peer.name, exc.reason)) from exc
-        await self._post(commands.peer_sent(peer.name, woke))
+        project = self._service.default_project()
+        if project is not None:
+            self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
+        await self._post(commands.peer_sent(peer.name, delivery.woke))
 
     def _describe(self, sessions: list[Session]) -> str:
         return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
@@ -393,7 +396,21 @@ class RemoteRunner:
         now = self._clock()
         self._turns[session.id] = _Turn(started=now, last_note=now)
 
+    async def _on_peer_event(self, event: Event) -> None:
+        """What another agent answered to a message sent from chat, or that it closed before answering."""
+        session = event.session
+        project = session.project.name
+        if event.kind in ("completed", "input-required"):
+            waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
+            session.waiting = waiting
+            await self._post(commands.peer_result(session.name, project, event.text, waiting))
+        elif event.kind == "detached" and event.text:
+            await self._post(commands.peer_exited(session.name, project))
+
     async def _on_event(self, event: Event) -> None:
+        if event.session.kind == ADOPTED:
+            await self._on_peer_event(event)
+            return
         session = event.session
         short = session.short
         turn = self._turns.pop(session.id, None)

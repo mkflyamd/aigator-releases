@@ -211,6 +211,14 @@ Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agen
 - The text is typed into the peer as the user's own words, prefixed `[via remote chat from the user]`, through the wake-on-ping path: a suspended session is woken first, nothing is typed at a permission prompt, while the user is typing, or when the session is in a permission mode that skips approvals (bypass or auto-accept). A permission mode that cannot be read is treated as one that skips approvals.
 - Sends are counted per peer per hour against `remote_peer_messages_per_hour`, separately from Relay's agent-to-agent limit, which a person typing in chat does not use. Each delivery is written to the same audit log as agent messages.
 
+### Replies from another agent
+
+After a message is delivered, Remote watches that session for one answer and posts it back to the chat as `[<name> - <project>] 🐊 <reply>`, under the agent's own name rather than Gator's. Only the turn that follows the message is posted: the agent's earlier turns and its own idle events are not. A question the agent asks is posted with its name and how to answer it (`@gator <name> <answer>`). If the session closes before answering, the chat is told once.
+
+- The reply is read through the same redaction as Remote's own replies and trimmed at the same length. The name is shown on one line with brackets replaced, so it cannot end the prefix early.
+- The prefix has the shape of Gator's own posts, so the loop guard ignores it and a reply can never start a command.
+- Watching is not owning. The session is held apart from the ones Remote started: it does not appear in `list` as a Remote session, `stop` and `stop all` never reach it, the idle limit only stops watching, and the terminal host refuses to close any session that was not started by this channel. A backend restart forgets what was being watched.
+
 ## Chat tabs
 
 A Gator chat tab is addressed as `@gator <tab name> <text>`. A chat tab cannot run without the open browser window (its history is in browser storage), and `POST /api/chat` has no CSRF check, so the command never calls that route. It is delivered to the tab as a frontend event and queues while the window is closed. This ships after Claude sessions work from Teams and Slack.

@@ -16,6 +16,8 @@ from remote.session_host import HostError, Project, SessionHost
 _log = logging.getLogger(__name__)
 
 IDLE_SECONDS = 8 * 3600.0
+STARTED = "started"
+ADOPTED = "adopted"
 
 
 class RemoteError(Exception):
@@ -35,11 +37,13 @@ class Session:
     waiting: bool = False
     last_event_at: float = 0.0
     stopping: bool = False
+    kind: str = STARTED  # ADOPTED: someone else's session that Remote only watches, never closes
+    name: str = ""
 
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # completed | input-required | failed | canceled
+    kind: str  # completed | input-required | failed | canceled | detached
     session: Session
     text: str = ""
 
@@ -84,7 +88,12 @@ class RemoteService:
         return self._default_project()
 
     def list(self) -> list[Session]:
-        return list(self._sessions.values())
+        """The sessions Remote started. Adopted ones are watched, not listed: nothing here types into
+        them, closes them or counts them, so every command that walks this list stays safe by shape."""
+        return [s for s in self._sessions.values() if s.kind == STARTED]
+
+    def watched(self, kind: str) -> list[Session]:
+        return [s for s in self._sessions.values() if s.kind == kind]
 
     def get(self, session_id: str) -> Session:
         try:
@@ -94,7 +103,32 @@ class RemoteService:
 
     def resolve(self, short: str) -> Session | None:
         short = short.lower()
-        return next((s for s in self._sessions.values() if s.short == short), None)
+        return next((s for s in self.list() if s.short == short), None)
+
+    def adopt(self, pty_id: str, project: Project, name: str, vendor_session_id: str | None) -> Session:
+        """Starts watching another agent's session after a message was typed into it, so the turn it
+        answers with can be reported. It is never closed by Remote, and not persisted: a restart
+        forgets it rather than adopting or killing what it did not start."""
+        now = self._clock()
+        session_id = f"pty:{pty_id}"
+        session = self._sessions.get(session_id)
+        if session is None:
+            session = self._sessions[session_id] = Session(
+                id=session_id,
+                pty_id=pty_id,
+                project=project,
+                short=f"peer-{pty_id[:8]}",
+                vendor_session_id=vendor_session_id,
+                created_at=now,
+                last_activity=now,
+                kind=ADOPTED,
+            )
+        if session.kind != ADOPTED:
+            raise RemoteError("That session was started by Remote control.")
+        session.name = name
+        session.last_activity = session.awaiting_since = now
+        session.waiting = False
+        return session
 
     def _short_for(self, project: Project) -> str:
         base = _slug(project.name)
@@ -161,6 +195,8 @@ class RemoteService:
         await self._deliver(self.get(session_id), text)
 
     async def _deliver(self, session: Session, text: str) -> None:
+        if session.kind != STARTED:
+            raise RemoteError("Messages to another agent go through its name, not through Remote control.")
         try:
             await self._host.deliver(session.pty_id, text)
         except HostError as exc:
@@ -170,6 +206,10 @@ class RemoteService:
 
     async def stop(self, session_id: str) -> None:
         session = self.get(session_id)
+        if session.kind == ADOPTED:
+            self._sessions.pop(session.id, None)
+            await self._emit("detached", session)
+            return
         session.stopping = True
         try:
             await self._host.kill(session.pty_id)
@@ -202,14 +242,22 @@ class RemoteService:
 
     async def tick(self) -> None:
         """One pass: report exits, finished turns and questions; stop idle sessions."""
-        for session in self.list():
+        for session in list(self._sessions.values()):
             if session.stopping:
                 continue
             if not await self._host.alive(session.pty_id):
                 self._sessions.pop(session.id, None)
-                await self._emit("failed", session, "The agent process exited.")
+                if session.kind == ADOPTED:
+                    if session.awaiting_since is not None:
+                        await self._emit("detached", session, "The agent process exited.")
+                else:
+                    await self._emit("failed", session, "The agent process exited.")
                 continue
             if self._clock() - session.last_activity >= limit(self._idle):
+                if session.kind == ADOPTED:
+                    self._sessions.pop(session.id, None)
+                    await self._emit("detached", session)
+                    continue
                 try:
                     await self.stop(session.id)
                 except RemoteError:
@@ -220,6 +268,10 @@ class RemoteService:
     async def _check_state(self, session: Session) -> None:
         state = await self._host.state(session.pty_id)
         if not state or state["at"] <= session.last_event_at:
+            return
+        # Another agent's own questions and turns are its owner's business; only what follows a
+        # message sent from chat is reported.
+        if session.kind == ADOPTED and (session.awaiting_since is None or state["at"] < session.awaiting_since):
             return
         if state["state"] == "asking":
             kind = "input-required"
@@ -233,4 +285,7 @@ class RemoteService:
             session.awaiting_since = None
             session.waiting = False
         session.last_activity = max(session.last_activity, state["at"])
-        await self._emit(kind, session, await self._host.last_message(session.pty_id))
+        text = await self._host.last_message(session.pty_id)
+        if kind == "completed" and session.kind == ADOPTED:
+            self._sessions.pop(session.id, None)  # watched for one answer; the next message adopts it again
+        await self._emit(kind, session, text)
